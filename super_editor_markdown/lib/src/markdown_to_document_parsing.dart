@@ -2,6 +2,8 @@ import 'dart:convert';
 
 import 'package:markdown/markdown.dart' as md;
 import 'package:super_editor/super_editor.dart';
+import 'package:super_editor_markdown/src/image_syntax.dart';
+import 'package:super_editor_markdown/super_editor_markdown.dart';
 
 import 'super_editor_syntax.dart';
 
@@ -21,17 +23,20 @@ MutableDocument deserializeMarkdownToDocument(
   List<ElementToNodeConverter> customElementToNodeConverters = const [],
   bool encodeHtml = false,
 }) {
-  final markdownLines = const LineSplitter().convert(markdown);
+  final markdownLines = const LineSplitter().convert(markdown).map<md.Line>((String l) {
+    return md.Line(l);
+  }).toList();
 
   final markdownDoc = md.Document(
+    encodeHtml: encodeHtml,
     blockSyntaxes: [
       ...customBlockSyntax,
       if (syntax == MarkdownSyntax.superEditor) ...[
         _HeaderWithAlignmentSyntax(),
-        _ParagraphWithAlignmentSyntax(),
+        const _ParagraphWithAlignmentSyntax(),
       ],
-      _EmptyLinePreservingParagraphSyntax(),
-      _TaskSyntax(),
+      const _EmptyLinePreservingParagraphSyntax(),
+      const _TaskSyntax(),
     ],
   );
   final blockParser = md.BlockParser(markdownLines, markdownDoc);
@@ -40,7 +45,7 @@ MutableDocument deserializeMarkdownToDocument(
   final markdownNodes = blockParser.parseLines();
 
   // Convert structured markdown to a Document.
-  final nodeVisitor = _MarkdownToDocument(customElementToNodeConverters, encodeHtml);
+  final nodeVisitor = _MarkdownToDocument(customElementToNodeConverters, encodeHtml, syntax);
   for (final node in markdownNodes) {
     node.accept(nodeVisitor);
   }
@@ -56,6 +61,14 @@ MutableDocument deserializeMarkdownToDocument(
     );
   }
 
+  // Add 1 hanging line for every 2 blank lines at the end, need this to preserve behavior pre markdown 7.2.1
+  final hangingEmptyLines = markdownLines.reversed.takeWhile((md.Line l) => l.isBlankLine);
+  if(hangingEmptyLines.isNotEmpty && documentNodes.lastOrNull is ListItemNode) {
+    for(var i = 0; i < hangingEmptyLines.length ~/ 2; i++) {
+      documentNodes.add(ParagraphNode(id: Editor.createNodeId(), text: AttributedText()));
+    }
+  }
+
   return MutableDocument(nodes: documentNodes);
 }
 
@@ -68,7 +81,13 @@ MutableDocument deserializeMarkdownToDocument(
 /// contains [DocumentNode]s that correspond to the visited
 /// markdown content.
 class _MarkdownToDocument implements md.NodeVisitor {
-  _MarkdownToDocument([this._elementToNodeConverters = const [], this._encodeHtml = false]);
+  _MarkdownToDocument([
+    this._elementToNodeConverters = const [],
+    this._encodeHtml = false,
+    this.syntax = MarkdownSyntax.normal,
+  ]);
+
+  final MarkdownSyntax syntax;
 
   final List<ElementToNodeConverter> _elementToNodeConverters;
 
@@ -76,6 +95,20 @@ class _MarkdownToDocument implements md.NodeVisitor {
   List<DocumentNode> get content => _content;
 
   final _listItemTypeStack = <ListItemType>[];
+
+  /// The count of the list items currently being visited.
+  ///
+  /// Being visited means that [visitElementBefore] was called for an element and
+  /// [visitElementAfter] wasn't called yet.
+  ///
+  /// A list item might contain children with tags like `p` and `h2`. When it does,
+  /// the list item text content is inside of its children and we only generate
+  /// document nodes when we visit the list item's children.
+  ///
+  /// We track the item count because when there are sublists, [visitElementBefore] is
+  /// called for the sublist item before [visitElementAfter] is called for the
+  /// main list item.
+  int _listItemVisitedCount = 0;
 
   /// If `true`, special HTML symbols are encoded with HTML escape codes, otherwise those
   /// symbols are left as-is.
@@ -91,6 +124,18 @@ class _MarkdownToDocument implements md.NodeVisitor {
         _content.add(node);
         return true;
       }
+    }
+
+    if (_listItemVisitedCount > 0 &&
+        !const ['li', 'ul', 'ol'].contains(element.tag) &&
+        (element.children == null || element.children!.isEmpty || element.children!.length == 1)) {
+      // We are visiting the text content of a list item. Add a list item node to the document.
+      _addListItem(
+        element,
+        listItemType: _listItemTypeStack.last,
+        indent: _listItemTypeStack.length - 1,
+      );
+      return false;
     }
 
     // TODO: re-organize parsing such that visitElementBefore collects
@@ -116,13 +161,19 @@ class _MarkdownToDocument implements md.NodeVisitor {
         _addHeader(element, level: 6);
         break;
       case 'p':
-        final inlineVisitor = _parseInline(element);
+        final inlineVisitor = _parseInline(element.textContent);
 
         if (inlineVisitor.isImage) {
           _addImage(
             // TODO: handle null image URL
             imageUrl: inlineVisitor.imageUrl!,
             altText: inlineVisitor.imageAltText!,
+            expectedBitmapSize: inlineVisitor.width != null || inlineVisitor.height != null
+                ? ExpectedSize(
+                    inlineVisitor.width != null ? int.tryParse(inlineVisitor.width!) : null,
+                    inlineVisitor.height != null ? int.tryParse(inlineVisitor.height!) : null,
+                  )
+                : null,
           );
         } else {
           _addParagraph(inlineVisitor.attributedText, element.attributes);
@@ -150,12 +201,25 @@ class _MarkdownToDocument implements md.NodeVisitor {
           throw Exception('Tried to parse a markdown list item but the list item type was null');
         }
 
+        // Mark that we are visiting a list item.
+        _listItemVisitedCount += 1;
+
+        if (element.children != null &&
+            element.children!.isNotEmpty &&
+            element.children!.first is! md.UnparsedContent) {
+          // The list item content is inside of its child's element. Wait until we visit
+          // the list item's children to generate a list node.
+          return true;
+        }
+
+        // We already have the content of the list item, generate a list node.
         _addListItem(
           element,
           listItemType: _listItemTypeStack.last,
           indent: _listItemTypeStack.length - 1,
         );
         break;
+
       case 'hr':
         _addHorizontalRule();
         break;
@@ -170,6 +234,9 @@ class _MarkdownToDocument implements md.NodeVisitor {
   @override
   void visitElementAfter(md.Element element) {
     switch (element.tag) {
+      case 'li':
+        _listItemVisitedCount -= 1;
+        break;
       // A list has ended. Pop the most recent list type from the stack.
       case 'ul':
       case 'ol':
@@ -210,7 +277,7 @@ class _MarkdownToDocument implements md.NodeVisitor {
     _content.add(
       ParagraphNode(
         id: Editor.createNodeId(),
-        text: _parseInlineText(element),
+        text: _parseInlineText(element.textContent),
         metadata: {
           'blockType': headerAttribution,
           'textAlign': textAlign,
@@ -227,7 +294,7 @@ class _MarkdownToDocument implements md.NodeVisitor {
         id: Editor.createNodeId(),
         text: attributedText,
         metadata: {
-          'textAlign': textAlign != null ? textAlign : null,
+          'textAlign': textAlign,
         },
       ),
     );
@@ -237,8 +304,8 @@ class _MarkdownToDocument implements md.NodeVisitor {
     _content.add(
       ParagraphNode(
         id: Editor.createNodeId(),
-        text: _parseInlineText(element),
-        metadata: {
+        text: _parseInlineText(element.textContent),
+        metadata: const {
           'blockType': blockquoteAttribution,
         },
       ),
@@ -260,7 +327,7 @@ class _MarkdownToDocument implements md.NodeVisitor {
         text: AttributedText(
           element.textContent,
         ),
-        metadata: {
+        metadata: const {
           'blockType': codeAttribution,
         },
       ),
@@ -270,12 +337,14 @@ class _MarkdownToDocument implements md.NodeVisitor {
   void _addImage({
     required String imageUrl,
     required String altText,
+    ExpectedSize? expectedBitmapSize,
   }) {
     _content.add(
       ImageNode(
         id: Editor.createNodeId(),
         imageUrl: imageUrl,
         altText: altText,
+        expectedBitmapSize: expectedBitmapSize,
       ),
     );
   }
@@ -291,12 +360,24 @@ class _MarkdownToDocument implements md.NodeVisitor {
     required ListItemType listItemType,
     required int indent,
   }) {
+    late String content;
+
+    if (element.children != null && element.children!.isNotEmpty && element.children!.first is md.UnparsedContent) {
+      // The list item might contain another sub-list. In that case, the textContent
+      // contains the text for the whole list instead of just the current list item.
+      // Use the textContent for the first child, which contains only the text
+      // of the current list item.
+      content = element.children!.first.textContent;
+    } else {
+      content = element.textContent;
+    }
+
     _content.add(
       ListItemNode(
         id: Editor.createNodeId(),
         itemType: listItemType,
         indent: indent,
-        text: _parseInlineText(element),
+        text: _parseInlineText(content),
       ),
     );
   }
@@ -305,24 +386,27 @@ class _MarkdownToDocument implements md.NodeVisitor {
     _content.add(
       TaskNode(
         id: Editor.createNodeId(),
-        text: _parseInlineText(element),
+        text: _parseInlineText(element.textContent),
         isComplete: element.attributes['completed'] == 'true',
       ),
     );
   }
 
-  AttributedText _parseInlineText(md.Element element) {
-    final inlineVisitor = _parseInline(element);
+  AttributedText _parseInlineText(String text) {
+    final inlineVisitor = _parseInline(text);
     return inlineVisitor.attributedText;
   }
 
-  _InlineMarkdownToDocument _parseInline(md.Element element) {
+  _InlineMarkdownToDocument _parseInline(String text) {
     final inlineParser = md.InlineParser(
-      element.textContent,
+      text,
       md.Document(
         inlineSyntaxes: [
+          SingleStrikethroughSyntax(), // this needs to be before md.StrikethroughSyntax to be recognized
           md.StrikethroughSyntax(),
           UnderlineSyntax(),
+          if (syntax == MarkdownSyntax.superEditor) //
+            SuperEditorImageSyntax(),
         ],
         encodeHtml: _encodeHtml,
       ),
@@ -355,13 +439,19 @@ class _InlineMarkdownToDocument implements md.NodeVisitor {
   // if we find an image without any text, we're parsing an image.
   // Otherwise, if there is any text, then we're parsing a paragraph
   // and we ignore the image.
-  bool get isImage => _imageUrl != null && attributedText.text.isEmpty;
+  bool get isImage => _imageUrl != null && attributedText.isEmpty;
 
   String? _imageUrl;
   String? get imageUrl => _imageUrl;
 
   String? _imageAltText;
   String? get imageAltText => _imageAltText;
+
+  String? get width => _width;
+  String? _width;
+
+  String? get height => _height;
+  String? _height;
 
   AttributedText get attributedText => _textStack.first;
 
@@ -373,6 +463,8 @@ class _InlineMarkdownToDocument implements md.NodeVisitor {
       // TODO: handle missing "src" attribute
       _imageUrl = element.attributes['src']!;
       _imageAltText = element.attributes['alt'] ?? '';
+      _width = element.attributes['width'];
+      _height = element.attributes['height'];
       return true;
     }
 
@@ -396,27 +488,27 @@ class _InlineMarkdownToDocument implements md.NodeVisitor {
     if (element.tag == 'strong') {
       styledText.addAttribution(
         boldAttribution,
-        SpanRange(0, styledText.text.length - 1),
+        SpanRange(0, styledText.length - 1),
       );
     } else if (element.tag == 'em') {
       styledText.addAttribution(
         italicsAttribution,
-        SpanRange(0, styledText.text.length - 1),
+        SpanRange(0, styledText.length - 1),
       );
     } else if (element.tag == "del") {
       styledText.addAttribution(
         strikethroughAttribution,
-        SpanRange(0, styledText.text.length - 1),
+        SpanRange(0, styledText.length - 1),
       );
     } else if (element.tag == "u") {
       styledText.addAttribution(
         underlineAttribution,
-        SpanRange(0, styledText.text.length - 1),
+        SpanRange(0, styledText.length - 1),
       );
     } else if (element.tag == 'a') {
       styledText.addAttribution(
-        LinkAttribution(url: Uri.parse(element.attributes['href']!)),
-        SpanRange(0, styledText.text.length - 1),
+        LinkAttribution.fromUri(Uri.parse(element.attributes['href']!)),
+        SpanRange(0, styledText.length - 1),
       );
     }
 
@@ -439,19 +531,55 @@ abstract class ElementToNodeConverter {
   DocumentNode? handleElement(md.Element element);
 }
 
-/// A Markdown [TagSyntax] that matches underline spans of text, which are represented in
+/// A Markdown [DelimiterSyntax] that matches underline spans of text, which are represented in
 /// Markdown with surrounding `¬` tags, e.g., "this is ¬underline¬ text".
 ///
-/// This [TagSyntax] produces `Element`s with a `u` tag.
-class UnderlineSyntax extends md.TagSyntax {
-  UnderlineSyntax() : super('¬', requiresDelimiterRun: true, allowIntraWord: true);
+/// This [DelimiterSyntax] produces `Element`s with a `u` tag.
+class UnderlineSyntax extends md.DelimiterSyntax {
+
+  /// According to the docs:
+  ///
+  /// https://pub.dev/documentation/markdown/latest/markdown/DelimiterSyntax-class.html
+  ///
+  /// The DelimiterSyntax constructor takes a nullable. However, the problem is there is a bug in the underlying dart
+  /// library if you don't pass it. Due to these two lines, one sets it to const [] if not passed, then the next tries
+  /// to sort. So we have to pass something at the moment or it blows up.
+  ///
+  /// https://github.com/dart-lang/markdown/blob/d53feae0760a4f0aae5ffdfb12d8e6acccf14b40/lib/src/inline_syntaxes/delimiter_syntax.dart#L67
+  /// https://github.com/dart-lang/markdown/blob/d53feae0760a4f0aae5ffdfb12d8e6acccf14b40/lib/src/inline_syntaxes/delimiter_syntax.dart#L319
+  static final _tags = [ md.DelimiterTag("u", 1) ];
+
+  UnderlineSyntax() : super('¬', requiresDelimiterRun: true, allowIntraWord: true, tags: _tags);
 
   @override
-  md.Node close(md.InlineParser parser, md.Delimiter opener, md.Delimiter closer,
-      {required List<md.Node> Function() getChildren}) {
-    return md.Element('u', getChildren());
+  Iterable<md.Node>? close(
+    md.InlineParser parser,
+    md.Delimiter opener,
+    md.Delimiter closer, {
+    required List<md.Node> Function() getChildren,
+    required String tag,
+  }) {
+    final element = md.Element('u', getChildren());
+    return [ element ];
   }
 }
+
+/// A Markdown [DelimiterSyntax] that matches strikethrough spans of text, which are represented in
+/// Markdown with surrounding `~` tags, e.g., "this is ~strikethrough~ text".
+///
+/// Markdown in library in 7.2.1 seems to not be matching single strikethroughs
+///
+/// This [DelimiterSyntax] produces `Element`s with a `del` tag.
+class SingleStrikethroughSyntax extends md.DelimiterSyntax {
+  SingleStrikethroughSyntax()
+      : super(
+          '~',
+          requiresDelimiterRun: true,
+          allowIntraWord: true,
+          tags: [md.DelimiterTag('del', 1)],
+        );
+}
+
 
 /// Parses a paragraph preceded by an alignment token.
 class _ParagraphWithAlignmentSyntax extends _EmptyLinePreservingParagraphSyntax {
@@ -464,7 +592,7 @@ class _ParagraphWithAlignmentSyntax extends _EmptyLinePreservingParagraphSyntax 
 
   @override
   bool canParse(md.BlockParser parser) {
-    if (!_alignmentNotationPattern.hasMatch(parser.current)) {
+    if (!_alignmentNotationPattern.hasMatch(parser.current.content)) {
       return false;
     }
 
@@ -480,7 +608,7 @@ class _ParagraphWithAlignmentSyntax extends _EmptyLinePreservingParagraphSyntax 
     /// We found a paragraph alignment token, but the block after the alignment token isn't a paragraph.
     /// Therefore, the paragraph alignment token is actually regular content. This parser doesn't need to
     /// take any action.
-    if (_standardNonParagraphBlockSyntaxes.any((syntax) => syntax.pattern.hasMatch(nextLine))) {
+    if (_standardNonParagraphBlockSyntaxes.any((syntax) => syntax.pattern.hasMatch(nextLine.content))) {
       return false;
     }
 
@@ -491,7 +619,7 @@ class _ParagraphWithAlignmentSyntax extends _EmptyLinePreservingParagraphSyntax 
 
   @override
   md.Node? parse(md.BlockParser parser) {
-    final match = _alignmentNotationPattern.firstMatch(parser.current);
+    final match = _alignmentNotationPattern.firstMatch(parser.current.content);
 
     // We've parsed the alignment token on the current line. We know a paragraph starts on the
     // next line. Move the parser to the next line so that we can parse the paragraph.
@@ -540,17 +668,36 @@ class _EmptyLinePreservingParagraphSyntax extends md.BlockSyntax {
   bool canEndBlock(md.BlockParser parser) => false;
 
   @override
-  bool canParse(md.BlockParser parser) => !_standardNonParagraphBlockSyntaxes.any((e) => e.canParse(parser));
+  bool canParse(md.BlockParser parser) {
+    if (_standardNonParagraphBlockSyntaxes.any((e) => e.canParse(parser))) {
+      // A standard non-paragraph parser wants to parse this input. Let the other parser run.
+      return false;
+    }
+
+    if (parser.current.content.isEmpty) {
+      // We consider this input to be a separator between blocks because
+      // it started with an empty line. We want to parse this input.
+      return true;
+    }
+
+    if (_isAtParagraphEnd(parser, ignoreEmptyBlocks: _endsWithHardLineBreak(parser.current.content))) {
+      // Another parser wants to parse this input. Let the other parser run.
+      return false;
+    }
+
+    // The input is a paragraph. We want to parse it.
+    return true;
+  }
 
   @override
   md.Node? parse(md.BlockParser parser) {
     final childLines = <String>[];
-    final startsWithEmptyLine = parser.current.isEmpty;
+    final startsWithEmptyLine = parser.current.content.isEmpty;
 
     // A hard line break causes the next line to be treated
     // as part of the same paragraph, except if the next line is
     // the beginning of another block element.
-    bool hasHardLineBreak = _endsWithHardLineBreak(parser.current);
+    bool hasHardLineBreak = _endsWithHardLineBreak(parser.current.content);
 
     if (startsWithEmptyLine) {
       // The parser started at an empty line.
@@ -566,7 +713,7 @@ class _EmptyLinePreservingParagraphSyntax extends md.BlockSyntax {
         return null;
       }
 
-      if (!_blankLinePattern.hasMatch(parser.current)) {
+      if (!_blankLinePattern.hasMatch(parser.current.content)) {
         // We found an empty line, but the following line isn't blank.
         // As there is no hard line break, the first line is consumed
         // as a separator between blocks.
@@ -579,7 +726,7 @@ class _EmptyLinePreservingParagraphSyntax extends md.BlockSyntax {
       childLines.add('');
 
       // Check for a hard line break, so we consume the next line if we found one.
-      hasHardLineBreak = _endsWithHardLineBreak(parser.current);
+      hasHardLineBreak = _endsWithHardLineBreak(parser.current.content);
       parser.advance();
     }
 
@@ -588,9 +735,9 @@ class _EmptyLinePreservingParagraphSyntax extends md.BlockSyntax {
     // ends with a hard line break.
     while (!_isAtParagraphEnd(parser, ignoreEmptyBlocks: hasHardLineBreak)) {
       final currentLine = parser.current;
-      childLines.add(currentLine);
+      childLines.add(currentLine.content);
 
-      hasHardLineBreak = _endsWithHardLineBreak(currentLine);
+      hasHardLineBreak = _endsWithHardLineBreak(currentLine.content);
 
       parser.advance();
     }
@@ -616,7 +763,8 @@ class _EmptyLinePreservingParagraphSyntax extends md.BlockSyntax {
       return true;
     }
     for (final syntax in parser.blockSyntaxes) {
-      if (!(syntax is md.EmptyBlockSyntax && ignoreEmptyBlocks) &&
+      if (syntax != this &&
+          !(syntax is md.EmptyBlockSyntax && ignoreEmptyBlocks) &&
           syntax.canParse(parser) &&
           syntax.canEndBlock(parser)) {
         return true;
@@ -673,7 +821,7 @@ class _TaskSyntax extends md.BlockSyntax {
 
   @override
   md.Node? parse(md.BlockParser parser) {
-    final match = pattern.firstMatch(parser.current);
+    final match = pattern.firstMatch(parser.current.content);
     if (match == null) {
       return null;
     }
@@ -691,10 +839,10 @@ class _TaskSyntax extends md.BlockSyntax {
     // - find a blank line OR
     // - find the start of another block element (including another task)
     while (!parser.isDone &&
-        !_blankLinePattern.hasMatch(parser.current) &&
-        !_standardNonParagraphBlockSyntaxes.any((syntax) => syntax.pattern.hasMatch(parser.current))) {
+        !_blankLinePattern.hasMatch(parser.current.content) &&
+        !_standardNonParagraphBlockSyntaxes.any((syntax) => syntax.pattern.hasMatch(parser.current.content))) {
       buffer.write('\n');
-      buffer.write(parser.current);
+      buffer.write(parser.current.content);
 
       parser.advance();
     }
@@ -728,7 +876,7 @@ class _HeaderWithAlignmentSyntax extends md.BlockSyntax {
 
   @override
   bool canParse(md.BlockParser parser) {
-    if (!_alignmentNotationPattern.hasMatch(parser.current)) {
+    if (!_alignmentNotationPattern.hasMatch(parser.current.content)) {
       return false;
     }
 
@@ -742,7 +890,7 @@ class _HeaderWithAlignmentSyntax extends md.BlockSyntax {
     }
 
     // Only parse if the next line is header.
-    if (!_headerSyntax.pattern.hasMatch(nextLine)) {
+    if (!_headerSyntax.pattern.hasMatch(nextLine.content)) {
       return false;
     }
 
@@ -751,7 +899,7 @@ class _HeaderWithAlignmentSyntax extends md.BlockSyntax {
 
   @override
   md.Node? parse(md.BlockParser parser) {
-    final match = _alignmentNotationPattern.firstMatch(parser.current);
+    final match = _alignmentNotationPattern.firstMatch(parser.current.content);
 
     // We've parsed the alignment token on the current line. We know a header starts on the
     // next line. Move the parser to the next line so that we can parse the header.

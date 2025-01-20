@@ -3,11 +3,11 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_test_robots/flutter_test_robots.dart';
 import 'package:flutter_test_runners/flutter_test_runners.dart';
-import 'package:super_editor/src/infrastructure/platforms/mac/mac_ime.dart';
 import 'package:super_editor/super_editor.dart';
 import 'package:super_editor/super_editor_test.dart';
 
 import '../test_runners.dart';
+import '../test_tools.dart';
 import '../test_tools_user_input.dart';
 import 'supereditor_test_tools.dart';
 import 'test_documents.dart';
@@ -35,7 +35,7 @@ void main() {
         await tester.typeImeText("Hello");
 
         // Ensure the text was typed.
-        expect((document.nodes.first as ParagraphNode).text.text, "Hello<- text here");
+        expect((document.first as ParagraphNode).text.toPlainText(), "Hello<- text here");
       });
 
       testWidgetsOnAllPlatforms('in the middle of existing text', (tester) async {
@@ -58,7 +58,7 @@ void main() {
         await tester.typeImeText("Hello");
 
         // Ensure the text was typed.
-        expect((document.nodes.first as ParagraphNode).text.text, "text here ->Hello<---");
+        expect((document.first as ParagraphNode).text.toPlainText(), "text here ->Hello<---");
       });
 
       testWidgetsOnAllPlatforms('at the end of existing text', (tester) async {
@@ -81,7 +81,7 @@ void main() {
         await tester.typeImeText("Hello");
 
         // Ensure the text was typed.
-        expect((document.nodes.first as ParagraphNode).text.text, "text here ->Hello");
+        expect((document.first as ParagraphNode).text.toPlainText(), "text here ->Hello");
       });
     });
 
@@ -125,7 +125,7 @@ void main() {
 
       // Ensure that the editor didn't receive the performAction call, and didn't
       // insert a new node.
-      expect(document.nodes.length, 1);
+      expect(document.nodeCount, 1);
     });
 
     testWidgetsOnAndroid('allows app to handle newline action', (tester) async {
@@ -165,7 +165,7 @@ void main() {
 
       // Ensure that the editor didn't receive the performAction call, and didn't
       // insert a new node.
-      expect(document.nodes.length, 1);
+      expect(document.nodeCount, 1);
     });
 
     testWidgetsOnMac('allows apps to handle selectors in their own way', (tester) async {
@@ -279,7 +279,7 @@ void main() {
 
       // Ensure the text was inserted.
       expect(
-        SuperEditorInspector.findTextInParagraph('1').text,
+        SuperEditorInspector.findTextInComponent('1').toPlainText(),
         'Going.',
       );
     });
@@ -353,7 +353,7 @@ void main() {
           ),
         ]);
 
-        expect((document.nodes.first as ParagraphNode).text.text, "This is a sentence. ");
+        expect((document.first as ParagraphNode).text.toPlainText(), "This is a sentence. ");
       });
 
       testWidgets('can type compound character in an empty paragraph', (tester) async {
@@ -395,7 +395,7 @@ void main() {
         await tester.pumpAndSettle();
 
         // Ensure that the empty paragraph now reads "¨".
-        expect((editContext.document.nodes[1] as ParagraphNode).text.text, "¨");
+        expect((editContext.document.getNodeAt(1)! as ParagraphNode).text.toPlainText(), "¨");
 
         // Ensure that the IME still has the invisible characters.
         expect(deltaClient.currentTextEditingValue!.text, ". ¨");
@@ -420,7 +420,7 @@ void main() {
         await tester.pumpAndSettle();
 
         // Ensure that the empty paragraph now reads "ü".
-        expect((editContext.document.nodes[1] as ParagraphNode).text.text, "ü");
+        expect((editContext.document.getNodeAt(1)! as ParagraphNode).text.toPlainText(), "ü");
       });
     });
 
@@ -494,13 +494,13 @@ void main() {
 
         // Ensure the paragraph was split.
         expect(
-          (doc.nodes[0] as ParagraphNode).text.text,
+          (doc.getNodeAt(0)! as ParagraphNode).text.toPlainText(),
           'Before the line break ',
         );
 
         // Ensure the paragraph was split.
         expect(
-          (doc.nodes[1] as ParagraphNode).text.text,
+          (doc.getNodeAt(1)! as ParagraphNode).text.toPlainText(),
           'new line',
         );
 
@@ -509,7 +509,7 @@ void main() {
           SuperEditorInspector.findDocumentSelection(),
           DocumentSelection.collapsed(
             position: DocumentPosition(
-              nodeId: doc.nodes[1].id,
+              nodeId: doc.getNodeAt(1)!.id,
               nodePosition: const TextNodePosition(offset: 0),
             ),
           ),
@@ -530,7 +530,7 @@ Paragraph two
         final doc = SuperEditorInspector.findDocument()!;
 
         // Place caret at the start of the second paragraph.
-        await tester.placeCaretInParagraph(doc.nodes[1].id, 0);
+        await tester.placeCaretInParagraph(doc.getNodeAt(1)!.id, 0);
 
         // Sends the deletion delta followed by non-text deltas.
         //
@@ -559,7 +559,7 @@ Paragraph two
 
         // Ensure the paragraph was merged.
         expect(
-          (doc.nodes[0] as ParagraphNode).text.text,
+          (doc.getNodeAt(0)! as ParagraphNode).text.toPlainText(),
           'Paragraph oneParagraph two',
         );
 
@@ -568,7 +568,7 @@ Paragraph two
           SuperEditorInspector.findDocumentSelection(),
           DocumentSelection.collapsed(
             position: DocumentPosition(
-              nodeId: doc.nodes[0].id,
+              nodeId: doc.getNodeAt(0)!.id,
               nodePosition: const TextNodePosition(offset: 13),
             ),
           ),
@@ -621,7 +621,7 @@ Paragraph two
         ], getter: imeClientGetter);
 
         expect(
-          SuperEditorInspector.findTextInParagraph('1').text,
+          SuperEditorInspector.findTextInComponent('1').toPlainText(),
           'Anonymous ',
         );
       });
@@ -666,7 +666,7 @@ Paragraph two
         ], getter: imeClientGetter);
 
         expect(
-          SuperEditorInspector.findTextInParagraph('1').text,
+          SuperEditorInspector.findTextInComponent('1').toPlainText(),
           'Anonymous ',
         );
       });
@@ -793,7 +793,7 @@ Paragraph two
             .pump();
 
         // Place the caret at the end of the paragraph.
-        await tester.placeCaretInParagraph(testContext.document.nodes.first.id, 3);
+        await tester.placeCaretInParagraph(testContext.document.first.id, 3);
 
         // Type a letter simulating a typo. The current text results in "Fixs".
         await tester.typeImeText('s');
@@ -821,6 +821,140 @@ Paragraph two
 
         // Ensure the text was replaced and the style was preserved.
         expect(testContext.document, equalsMarkdown('**Fixed **'));
+      });
+    });
+
+    group('on iPhone 13 (iOS 17.2) with korean keyboard', () {
+      testWidgetsOnIos('applies keyboard suggestions', (tester) async {
+        await tester //
+            .createDocument()
+            .withSingleEmptyParagraph()
+            .withInputSource(TextInputSource.ime)
+            .pump();
+
+        // Place the caret at the start of the paragraph.
+        await tester.placeCaretInParagraph('1', 0);
+
+        // Simulate the user typing "ㅅ".
+        await tester.ime.sendDeltas(const [
+          TextEditingDeltaNonTextUpdate(
+            oldText: '. ',
+            selection: TextSelection.collapsed(offset: 2),
+            composing: TextRange(start: -1, end: -1),
+          ),
+          TextEditingDeltaInsertion(
+            oldText: '. ',
+            textInserted: 'ㅅ',
+            insertionOffset: 2,
+            selection: TextSelection.collapsed(offset: 3, affinity: TextAffinity.downstream),
+            composing: TextRange(start: -1, end: -1),
+          ),
+        ], getter: imeClientGetter);
+
+        // Simulate the user typing "ㅛ" and the IME converting the "ㅅㅛ" to "쇼".
+        await tester.ime.sendDeltas(const [
+          TextEditingDeltaNonTextUpdate(
+            oldText: '. ㅅ',
+            selection: TextSelection(baseOffset: 1, extentOffset: 3, isDirectional: false),
+            composing: TextRange(start: -1, end: -1),
+          ),
+          TextEditingDeltaDeletion(
+            oldText: '. ㅅ',
+            deletedRange: TextRange(start: 1, end: 3),
+            selection: TextSelection.collapsed(
+              offset: 1,
+              affinity: TextAffinity.downstream,
+            ),
+            composing: TextRange(start: -1, end: -1),
+          ),
+          TextEditingDeltaInsertion(
+            oldText: '.',
+            textInserted: ' ',
+            insertionOffset: 1,
+            selection: TextSelection.collapsed(
+              offset: 2,
+              affinity: TextAffinity.downstream,
+            ),
+            composing: TextRange(start: -1, end: -1),
+          ),
+          TextEditingDeltaInsertion(
+            oldText: '. ',
+            textInserted: '쇼',
+            insertionOffset: 2,
+            selection: TextSelection.collapsed(
+              offset: 3,
+              affinity: TextAffinity.downstream,
+            ),
+            composing: TextRange(start: -1, end: -1),
+          )
+        ], getter: imeClientGetter);
+
+        // Ensure text and selection were updated.
+        expect(SuperEditorInspector.findTextInComponent('1').toPlainText(), '쇼');
+        expect(
+          SuperEditorInspector.findDocumentSelection(),
+          selectionEquivalentTo(
+            const DocumentSelection.collapsed(
+              position: DocumentPosition(
+                nodeId: '1',
+                nodePosition: TextNodePosition(offset: 1),
+              ),
+            ),
+          ),
+        );
+      });
+    });
+
+    group('on iPhone 15 (iOS 17.5)', () {
+      testWidgetsOnIos('ignores keyboard suggestions when pressing the newline button', (tester) async {
+        final testContext = await tester //
+            .createDocument()
+            .withSingleEmptyParagraph()
+            .withInputSource(TextInputSource.ime)
+            .pump();
+
+        // Place the caret at the start of the paragraph.
+        await tester.placeCaretInParagraph('1', 0);
+
+        // Type some text.
+        await tester.typeImeText('run tom');
+
+        // Press the new line button.
+        await tester.testTextInput.receiveAction(TextInputAction.newline);
+
+        // Simulate the IME sending a delta replacing "tom" with "Tom".
+        // At this point, we already added a new paragraph to the document,
+        // so these text ranges are invalid for us.
+        await tester.ime.sendDeltas([
+          const TextEditingDeltaReplacement(
+            oldText: '. Run tom',
+            replacementText: 'Tom',
+            replacedRange: TextRange(start: 6, end: 9),
+            selection: TextSelection.collapsed(offset: 9),
+            composing: TextRange(start: -1, end: -1),
+          ),
+        ], getter: imeClientGetter);
+
+        await tester.ime.sendDeltas([
+          const TextEditingDeltaInsertion(
+            oldText: '. Run Tom',
+            textInserted: '\n',
+            insertionOffset: 9,
+            selection: TextSelection.collapsed(
+              offset: 10,
+              affinity: TextAffinity.downstream,
+            ),
+            composing: TextRange(start: -1, end: -1),
+          ),
+        ], getter: imeClientGetter);
+        await tester.pump();
+
+        final document = testContext.document;
+
+        // Ensure the replacement was ignored and a new empty node was added.
+        expect(document.nodeCount, 2);
+        expect((document.getNodeAt(0)! as TextNode).text.toPlainText(), 'run tom');
+        expect((document.getNodeAt(1)! as TextNode).text.toPlainText(), '');
       });
     });
 
@@ -878,6 +1012,27 @@ Paragraph two
       }, variant: inputSourceVariant);
     });
 
+    testWidgetsOnWebDesktop('inside a CustomScrollView > inserts space instead of scrolling with SPACEBAR',
+        (tester) async {
+      final testContext = await tester //
+          .createDocument()
+          .withSingleEmptyParagraph()
+          .insideCustomScrollView()
+          .withInputSource(TextInputSource.ime)
+          .pump();
+
+      final nodeId = testContext.document.first.id;
+
+      // Place the caret at the beginning of the paragraph.
+      await tester.placeCaretInParagraph(nodeId, 0);
+
+      // Press space to insert a space character.
+      await _typeSpaceAdaptive(tester);
+
+      // Ensure the space character was inserted.
+      expect(SuperEditorInspector.findTextInComponent(nodeId).toPlainText(), ' ');
+    });
+
     testWidgetsOnWebDesktop('deletes a character with backspace', (tester) async {
       final testContext = await tester //
           .createDocument()
@@ -885,7 +1040,7 @@ Paragraph two
           .withInputSource(TextInputSource.ime)
           .pump();
 
-      final nodeId = testContext.document.nodes.first.id;
+      final nodeId = testContext.document.first.id;
 
       // Place the caret at the end of the paragraph.
       await tester.placeCaretInParagraph(nodeId, 19);
@@ -907,7 +1062,49 @@ Paragraph two
       );
 
       // Ensure the last character was deleted.
-      expect(SuperEditorInspector.findTextInParagraph(nodeId).text, 'This is a paragrap');
+      expect(SuperEditorInspector.findTextInComponent(nodeId).toPlainText(), 'This is a paragrap');
+    });
+
+    testWidgetsOnWebDesktop('merges paragraphs backspace at the beginning of a paragraph', (tester) async {
+      await tester //
+          .createDocument()
+          .fromMarkdown('''
+Paragraph one
+
+Paragraph two
+''')
+          .withInputSource(TextInputSource.ime)
+          .pump();
+
+      final doc = SuperEditorInspector.findDocument()!;
+
+      // Place caret at the start of the second paragraph.
+      await tester.placeCaretInParagraph(doc.getNodeAt(1)!.id, 0);
+
+      // Simulates the user pressing BACKSPACE, which generates a deletion delta.
+      // This deletion will cause the two paragraphs to be merged.
+      await tester.ime.sendDeltas(
+        const [
+          TextEditingDeltaNonTextUpdate(
+            oldText: '. Paragraph two',
+            selection: TextSelection.collapsed(offset: 2),
+            composing: TextRange(start: -1, end: -1),
+          ),
+          TextEditingDeltaDeletion(
+            oldText: '. Paragraph two',
+            deletedRange: TextRange(start: 1, end: 2),
+            selection: TextSelection.collapsed(offset: 1),
+            composing: TextRange(start: -1, end: -1),
+          ),
+        ],
+        getter: imeClientGetter,
+      );
+
+      // Ensure the paragraph was merged.
+      expect(
+        (doc.getNodeAt(0)! as ParagraphNode).text.toPlainText(),
+        'Paragraph oneParagraph two',
+      );
     });
 
     group('text serialization and selected content', () {
@@ -1171,6 +1368,123 @@ Paragraph two
       });
     });
 
+    testWidgetsOnMobile('opens software keyboard when tapping on caret', (tester) async {
+      await tester
+          .createDocument() //
+          .withSingleParagraph()
+          .withInputSource(TextInputSource.ime)
+          .pump();
+
+      // Place the caret at "Lorem| ipsum".
+      await tester.placeCaretInParagraph('1', 5);
+
+      // Hide the software keyboard using the system button.
+      tester.testTextInput.hide();
+
+      bool wasKeyboardShown = false;
+
+      // Intercept the messages sent to the platform to check if
+      // we showed the software keyboard.
+      tester
+          .interceptChannel(SystemChannels.textInput.name) //
+          .interceptMethod(
+        'TextInput.show',
+        (methodCall) {
+          wasKeyboardShown = true;
+
+          return null;
+        },
+      );
+
+      // Tap again on the same selected position.
+      await tester.placeCaretInParagraph('1', 5);
+
+      // Ensure the keyboard was shown.
+      expect(wasKeyboardShown, isTrue);
+    });
+
+    testWidgetsOnIos('opens software keyboard when tapping on an expanded selection', (tester) async {
+      await tester
+          .createDocument() //
+          .withSingleParagraph()
+          .withInputSource(TextInputSource.ime)
+          .pump();
+
+      // Double tap to select "|Lorem| ipsum".
+      await tester.doubleTapInParagraph('1', 1);
+
+      // Hide the software keyboard using the system button.
+      tester.testTextInput.hide();
+
+      bool wasKeyboardShown = false;
+
+      // Intercept the messages sent to the platform to check if
+      // we showed the software keyboard.
+      tester
+          .interceptChannel(SystemChannels.textInput.name) //
+          .interceptMethod(
+        'TextInput.show',
+        (methodCall) {
+          wasKeyboardShown = true;
+
+          return null;
+        },
+      );
+
+      // Tap somewhere on the existing selection.
+      await tester.tapInParagraph('1', 3);
+
+      // Ensure the keyboard was shown.
+      expect(wasKeyboardShown, isTrue);
+    });
+
+    testWidgetsOnAllPlatforms('clears composing region after losing focus', (tester) async {
+      final focusNode = FocusNode();
+
+      final testContext = await tester
+          .createDocument() //
+          .withTwoEmptyParagraphs()
+          .withInputSource(TextInputSource.ime)
+          .withFocusNode(focusNode)
+          .pump();
+
+      // Place the caret at the beginning of the document.
+      await tester.placeCaretInParagraph('1', 0);
+
+      // Type something to have some text to tap on.
+      await tester.typeImeText('Composing: ');
+
+      // Ensure we don't have a composing region.
+      expect(testContext.composer.composingRegion.value, isNull);
+
+      // Simulate an insertion containing a composing region.
+      await tester.ime.sendDeltas(
+        [
+          const TextEditingDeltaInsertion(
+            oldText: '. Composing: ',
+            textInserted: "あs",
+            insertionOffset: 13,
+            selection: TextSelection.collapsed(offset: 15),
+            composing: TextRange(start: 13, end: 15),
+          ),
+        ],
+        getter: imeClientGetter,
+      );
+
+      // Ensure the editor applied a composing region.
+      expect(
+        testContext.composer.composingRegion.value,
+        isNotNull,
+      );
+
+      // Remove focus from the editor.
+      focusNode.unfocus();
+      await tester.pump();
+
+      // Ensure the composing region was cleared.
+      expect(testContext.composer.composingRegion.value, isNull);
+    });
+
     testWidgetsOnAllPlatforms('clears composing region after selection changes', (tester) async {
       final testContext = await tester
           .createDocument() //
@@ -1233,6 +1547,99 @@ Paragraph two
 
       // Ensure SuperEditor composing region was cleared.
       expect(testContext.composer.composingRegion.value, isNull);
+    });
+
+    testWidgetsOnMac('clears composing region after merging paragraphs', (tester) async {
+      final testContext = await tester
+          .createDocument() //
+          .withTwoEmptyParagraphs()
+          .withInputSource(TextInputSource.ime)
+          .pump();
+
+      // Place the caret at the beginning of the second paragraph.
+      await tester.placeCaretInParagraph('2', 0);
+
+      // Ensure we don't have a composing region.
+      expect(testContext.composer.composingRegion.value, isNull);
+
+      // Simulate an insertion containing a composing region.
+      await tester.ime.sendDeltas(
+        [
+          const TextEditingDeltaNonTextUpdate(
+            oldText: '. ',
+            selection: TextSelection.collapsed(offset: 2),
+            composing: TextRange(start: 2, end: 2),
+          ),
+          const TextEditingDeltaInsertion(
+            oldText: '. ',
+            textInserted: 'あ',
+            insertionOffset: 2,
+            selection: TextSelection.collapsed(offset: 3),
+            composing: TextRange(start: 2, end: 3),
+          ),
+        ],
+        getter: imeClientGetter,
+      );
+
+      // Ensure the editor applied the composing region.
+      expect(
+        testContext.composer.composingRegion.value,
+        isNotNull,
+      );
+
+      // Intercept the setEditingState message sent to the platform to check if we
+      // cleared the IME composing region when merging paragraphs.
+      int? composingBase;
+      int? composingExtent;
+      tester
+          .interceptChannel(SystemChannels.textInput.name) //
+          .interceptMethod(
+        'TextInput.setEditingState',
+        (methodCall) {
+          final params = methodCall.arguments as Map;
+          composingBase = params['composingBase'];
+          composingExtent = params['composingExtent'];
+
+          return null;
+        },
+      );
+
+      // Simulate the user pressing BACKSPACE to delete the first character.
+      // Even though the selection sits after a whitespace in the IME, mac still reports
+      // a composing region starting after the space.
+      await tester.ime.sendDeltas(
+        [
+          const TextEditingDeltaDeletion(
+            oldText: '. あ',
+            deletedRange: TextRange(start: 2, end: 3),
+            selection: TextSelection.collapsed(offset: 2),
+            composing: TextRange(start: 2, end: 2),
+          ),
+        ],
+        getter: imeClientGetter,
+      );
+
+      // Ensure we still have a composing region in the editor.
+      expect(
+        testContext.composer.composingRegion.value,
+        isNotNull,
+      );
+
+      // Simulate the user pressing BACKSPACE to merge the paragraphs.
+      // Now that we are deleting a whitespace, mac reports a deleteBackward: selector
+      // instead of a deletion delta.
+      await _receiveSelector('deleteBackward:');
+      await tester.pump();
+
+      // Ensure the composing region was cleared in the IME.
+      expect(composingBase, -1);
+      expect(composingExtent, -1);
+
+      // Ensure SuperEditor composing region was cleared.
+      expect(testContext.composer.composingRegion.value, isNull);
+
+      // Ensure the paragraphs were merged.
+      expect(testContext.document.nodeCount, equals(1));
     });
   });
 }
@@ -1297,12 +1704,12 @@ MutableDocument _singleParagraphWithLinkDoc() {
           AttributedSpans(
             attributions: [
               SpanMarker(
-                attribution: LinkAttribution(url: Uri.parse('https://google.com')),
+                attribution: LinkAttribution.fromUri(Uri.parse('https://google.com')),
                 offset: 0,
                 markerType: SpanMarkerType.start,
               ),
               SpanMarker(
-                attribution: LinkAttribution(url: Uri.parse('https://google.com')),
+                attribution: LinkAttribution.fromUri(Uri.parse('https://google.com')),
                 offset: 17,
                 markerType: SpanMarkerType.end,
               ),
@@ -1323,4 +1730,38 @@ class _TestImeOverrides extends DeltaTextInputClientDecorator {
   void performAction(TextInputAction action) {
     performActionCallback(action);
   }
+}
+
+/// Simulates pressing the SPACE key.
+///
+/// First, this method simulates pressing the SPACE key on a physical keyboard. If that key event goes unhandled
+/// then this method generates an insertion delta of " ".
+///
+// TODO: extract this to the flutter_test_robots package.
+Future<void> _typeSpaceAdaptive(WidgetTester tester) async {
+  final handled = await tester.sendKeyEvent(LogicalKeyboardKey.space);
+
+  if (handled) {
+    await tester.pumpAndSettle();
+    return;
+  }
+
+  await tester.typeImeText(' ');
+}
+
+/// Simulates a `TextInputClient.performSelectors` call from the platform.
+Future<void> _receiveSelector(String selectorName) async {
+  await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.handlePlatformMessage(
+    SystemChannels.textInput.name,
+    SystemChannels.textInput.codec.encodeMethodCall(
+      MethodCall(
+        "TextInputClient.performSelectors",
+        [
+          -1,
+          [selectorName],
+        ],
+      ),
+    ),
+    null,
+  );
 }

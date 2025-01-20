@@ -1,6 +1,8 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:super_editor/src/infrastructure/platforms/android/selection_handles.dart';
+import 'package:super_editor/src/infrastructure/platforms/ios/selection_handles.dart';
 import 'package:super_editor/super_editor.dart';
 import 'package:super_text_layout/super_text_layout.dart';
 
@@ -121,11 +123,220 @@ extension SuperTextFieldRobot on WidgetTester {
     return gesture;
   }
 
+  /// Drags the [SuperTextField] upstream handle by the given delta and
+  /// returns the [TestGesture] used to perform the drag.
+  ///
+  /// {@macro supertextfield_finder}
+  Future<TestGesture> dragUpstreamMobileHandleByDistanceInSuperTextField(
+    Offset delta, [
+    Finder? superTextFieldFinder,
+  ]) async {
+    final fieldFinder =
+        SuperTextFieldInspector.findInnerPlatformTextField(superTextFieldFinder ?? find.byType(SuperTextField));
+    final match = fieldFinder.evaluate().single.widget;
+
+    if (match is SuperAndroidTextField) {
+      return _dragAndroidUpstreamHandleByDistanceInSuperTextField(delta, fieldFinder);
+    }
+
+    if (match is SuperIOSTextField) {
+      return _dragIOSUpstreamHandleByDistanceInSuperTextField(delta, fieldFinder);
+    }
+
+    throw Exception("Couldn't find a SuperTextField with the given Finder: $fieldFinder");
+  }
+
+  /// Drags the [SuperTextField] downstream handle by the given delta and
+  /// returns the [TestGesture] used to perform the drag.
+  ///
+  /// {@macro supertextfield_finder}
+  Future<TestGesture> dragDownstreamMobileHandleByDistanceInSuperTextField(
+    Offset delta, [
+    Finder? superTextFieldFinder,
+  ]) async {
+    final fieldFinder =
+        SuperTextFieldInspector.findInnerPlatformTextField(superTextFieldFinder ?? find.byType(SuperTextField));
+    final match = fieldFinder.evaluate().single.widget;
+
+    if (match is SuperAndroidTextField) {
+      return _dragAndroidDownstreamHandleByDistanceInSuperTextField(delta, fieldFinder);
+    }
+
+    if (match is SuperIOSTextField) {
+      return _dragIOSDownstreamHandleByDistanceInSuperTextField(delta, fieldFinder);
+    }
+
+    throw Exception("Couldn't find a SuperTextField with the given Finder: $fieldFinder");
+  }
+
+  /// Drags the [SuperAndroidTextField] upstream handle by the given delta and
+  /// returns the [TestGesture] used to perform the drag.
+  ///
+  /// {@macro supertextfield_finder}
+  Future<TestGesture> _dragAndroidUpstreamHandleByDistanceInSuperTextField(
+    Offset delta, [
+    Finder? superTextFieldFinder,
+  ]) async {
+    // TODO: lookup the actual handle size and offset when follow_the_leader correctly reports global bounds for followers
+    // Use our knowledge that the handle sits directly beneath the caret to drag it.
+    final handleFinder = find.descendant(
+      of: superTextFieldFinder ?? find.byType(SuperAndroidTextField),
+      matching: find.byWidgetPredicate(
+        (widget) =>
+            widget is AndroidSelectionHandle && //
+            widget.handleType == HandleType.upstream,
+      ),
+    );
+
+    expect(handleFinder, findsOne);
+
+    return await _dragHandleByDistanceInSuperTextField(handleFinder, delta);
+  }
+
+  /// Drags the [SuperAndroidTextField] downstream handle by the given delta and
+  /// returns the [TestGesture] used to perform the drag.
+  ///
+  /// {@macro supertextfield_finder}
+  Future<TestGesture> _dragAndroidDownstreamHandleByDistanceInSuperTextField(
+    Offset delta, [
+    Finder? superTextFieldFinder,
+  ]) async {
+    // TODO: lookup the actual handle size and offset when follow_the_leader correctly reports global bounds for followers
+    // Use our knowledge that the handle sits directly beneath the caret to drag it.
+    final handleFinder = find.descendant(
+      of: superTextFieldFinder ?? find.byType(SuperAndroidTextField),
+      matching: find.byWidgetPredicate(
+        (widget) =>
+            widget is AndroidSelectionHandle && //
+            widget.handleType == HandleType.downstream,
+      ),
+    );
+
+    expect(handleFinder, findsOne);
+
+    return await _dragHandleByDistanceInSuperTextField(handleFinder, delta);
+  }
+
+  /// Drags the [SuperIOSTextField] upstream handle by the given delta and
+  /// returns the [TestGesture] used to perform the drag.
+  ///
+  /// {@macro supertextfield_finder}
+  Future<TestGesture> _dragIOSUpstreamHandleByDistanceInSuperTextField(
+    Offset delta, [
+    Finder? superTextFieldFinder,
+  ]) async {
+    // TODO: lookup the actual handle size and offset when follow_the_leader correctly reports global bounds for followers
+    // Use our knowledge that the handle sits directly beneath the caret to drag it.
+    final handleFinder = find.descendant(
+      of: superTextFieldFinder ?? find.byType(SuperIOSTextField),
+      matching: find.byWidgetPredicate(
+        (widget) =>
+            widget is IOSSelectionHandle && //
+            widget.handleType == HandleType.upstream,
+      ),
+    );
+
+    expect(handleFinder, findsOne);
+
+    return await _dragHandleByDistanceInSuperTextField(handleFinder, delta);
+  }
+
+  /// Drags the [SuperIOSTextField] downstream handle by the given delta and
+  /// returns the [TestGesture] used to perform the drag.
+  ///
+  /// {@macro supertextfield_finder}
+  Future<TestGesture> _dragIOSDownstreamHandleByDistanceInSuperTextField(
+    Offset delta, [
+    Finder? superTextFieldFinder,
+  ]) async {
+    // TODO: lookup the actual handle size and offset when follow_the_leader correctly reports global bounds for followers
+    // Use our knowledge that the handle sits directly beneath the caret to drag it.
+    final handleFinder = find.descendant(
+      of: superTextFieldFinder ?? find.byType(SuperIOSTextField),
+      matching: find.byWidgetPredicate(
+        (widget) =>
+            widget is IOSSelectionHandle && //
+            widget.handleType == HandleType.downstream,
+      ),
+    );
+
+    expect(handleFinder, findsOne);
+
+    return await _dragHandleByDistanceInSuperTextField(handleFinder, delta);
+  }
+
+  /// Drags the [SuperTextField] handle found by [superTextFieldHandleFinder] by
+  /// the given delta and returns the [TestGesture] used to perform the drag.
+  ///
+  /// Can be used to drag [SuperTextField] collapsed or expanded selection handles.
+  Future<TestGesture> _dragHandleByDistanceInSuperTextField(
+    Finder superTextFieldHandleFinder,
+    Offset delta,
+  ) async {
+    final handleCenter = getCenter(superTextFieldHandleFinder);
+
+    final gesture = await startGesture(handleCenter);
+    await pump(kTapMinTime);
+
+    for (int i = 0; i < 50; i += 1) {
+      await gesture.moveBy(delta / 50);
+      await pump(const Duration(milliseconds: 50));
+    }
+
+    return gesture;
+  }
+
+  /// Tap on an Android collapsed drag handle.
+  ///
+  /// {@macro supertextfield_finder}
+  Future<void> tapOnAndroidCollapsedHandle([Finder? superTextFieldFinder]) async {
+    final handleElement = find
+        .byWidgetPredicate(
+          (widget) =>
+              widget is AndroidSelectionHandle && //
+              widget.handleType == HandleType.collapsed,
+        )
+        .evaluate()
+        .firstOrNull;
+    assert(handleElement != null, "Tried to press down on Android collapsed handle but no handle was found.");
+    final renderHandle = handleElement!.renderObject as RenderBox;
+    final handleCenter = renderHandle.localToGlobal(renderHandle.size.center(Offset.zero));
+
+    await tapAt(handleCenter);
+  }
+
+  /// Taps in a [SuperTextField] at the given [offset]
+  ///
+  /// {@macro supertextfield_finder}
+  Future<void> tapAtSuperTextField(
+    int offset, {
+    Finder? superTextFieldFinder,
+    TextAffinity affinity = TextAffinity.downstream,
+    int buttons = kPrimaryButton,
+  }) async {
+    await _tapAtSuperTextField(offset, 1, superTextFieldFinder, affinity, buttons);
+  }
+
   /// Double taps in a [SuperTextField] at the given [offset]
   ///
   /// {@macro supertextfield_finder}
   Future<void> doubleTapAtSuperTextField(int offset,
       [Finder? superTextFieldFinder, TextAffinity affinity = TextAffinity.downstream]) async {
+    await _tapAtSuperTextField(offset, 2, superTextFieldFinder, affinity);
+  }
+
+  /// Triple taps in a [SuperTextField] at the given [offset]
+  ///
+  /// {@macro supertextfield_finder}
+  Future<void> tripleTapAtSuperTextField(int offset,
+      [Finder? superTextFieldFinder, TextAffinity affinity = TextAffinity.downstream]) async {
+    await _tapAtSuperTextField(offset, 3, superTextFieldFinder, affinity);
+  }
+
+  Future<void> _tapAtSuperTextField(int offset, int tapCount,
+      [Finder? superTextFieldFinder,
+      TextAffinity affinity = TextAffinity.downstream,
+      int buttons = kPrimaryButton]) async {
     // TODO: De-duplicate this behavior with placeCaretInSuperTextField
     final fieldFinder =
         SuperTextFieldInspector.findInnerPlatformTextField(superTextFieldFinder ?? find.byType(SuperTextField));
@@ -136,16 +347,18 @@ extension SuperTextFieldRobot on WidgetTester {
 
     if (match is SuperDesktopTextField) {
       final superDesktopTextField = state<SuperDesktopTextFieldState>(fieldFinder);
-
-      bool didTap = await _tapAtTextPositionOnDesktop(superDesktopTextField, offset, affinity, scrollOffset);
-      if (!didTap) {
-        throw Exception("The desired text offset wasn't tappable in SuperTextField: $offset");
-      }
-      await pump(kDoubleTapMinTime);
-
-      didTap = await _tapAtTextPositionOnDesktop(superDesktopTextField, offset, affinity, scrollOffset);
-      if (!didTap) {
-        throw Exception("The desired text offset wasn't tappable in SuperTextField: $offset");
+      for (int i = 1; i <= tapCount; i++) {
+        bool didTap = await _tapAtTextPositionOnDesktop(
+          superDesktopTextField,
+          offset,
+          affinity,
+          scrollOffset,
+          buttons,
+        );
+        if (!didTap) {
+          throw Exception("The desired text offset wasn't tappable in SuperTextField: $offset");
+        }
+        await pump(tapCount > 1 ? kDoubleTapMinTime : kDoubleTapTimeout);
       }
 
       await pumpAndSettle();
@@ -154,17 +367,18 @@ extension SuperTextFieldRobot on WidgetTester {
     }
 
     if (match is SuperAndroidTextField) {
-      bool didTap = await _tapAtTextPositionOnAndroid(
-          state<SuperAndroidTextFieldState>(fieldFinder), offset, affinity, scrollOffset);
-      if (!didTap) {
-        throw Exception("The desired text offset wasn't tappable in SuperTextField: $offset");
-      }
-      await pump(kDoubleTapMinTime);
-
-      didTap = await _tapAtTextPositionOnAndroid(
-          state<SuperAndroidTextFieldState>(fieldFinder), offset, affinity, scrollOffset);
-      if (!didTap) {
-        throw Exception("The desired text offset wasn't tappable in SuperTextField: $offset");
+      for (int i = 1; i <= tapCount; i++) {
+        bool didTap = await _tapAtTextPositionOnAndroid(
+          state<SuperAndroidTextFieldState>(fieldFinder),
+          offset,
+          affinity,
+          scrollOffset,
+          buttons,
+        );
+        if (!didTap) {
+          throw Exception("The desired text offset wasn't tappable in SuperTextField: $offset");
+        }
+        await pump(tapCount > 1 ? kDoubleTapMinTime : kDoubleTapTimeout);
       }
 
       await pumpAndSettle();
@@ -173,17 +387,18 @@ extension SuperTextFieldRobot on WidgetTester {
     }
 
     if (match is SuperIOSTextField) {
-      bool didTap =
-          await _tapAtTextPositionOnIOS(state<SuperIOSTextFieldState>(fieldFinder), offset, affinity, scrollOffset);
-      if (!didTap) {
-        throw Exception("The desired text offset wasn't tappable in SuperTextField: $offset");
-      }
-      await pump(kDoubleTapMinTime);
-
-      didTap =
-          await _tapAtTextPositionOnIOS(state<SuperIOSTextFieldState>(fieldFinder), offset, affinity, scrollOffset);
-      if (!didTap) {
-        throw Exception("The desired text offset wasn't tappable in SuperTextField: $offset");
+      for (int i = 1; i <= tapCount; i++) {
+        bool didTap = await _tapAtTextPositionOnIOS(
+          state<SuperIOSTextFieldState>(fieldFinder),
+          offset,
+          affinity,
+          scrollOffset,
+          buttons,
+        );
+        if (!didTap) {
+          throw Exception("The desired text offset wasn't tappable in SuperTextField: $offset");
+        }
+        await pump(tapCount > 1 ? kDoubleTapMinTime : kDoubleTapTimeout);
       }
 
       await pumpAndSettle();
@@ -199,9 +414,18 @@ extension SuperTextFieldRobot on WidgetTester {
     int offset, [
     TextAffinity textAffinity = TextAffinity.downstream,
     Offset scrollOffset = Offset.zero,
+    int buttons = kPrimaryButton,
   ]) async {
     final textFieldBox = textField.context.findRenderObject() as RenderBox;
-    return await _tapAtTextPositionInTextLayout(textField.textLayout, textFieldBox, offset, textAffinity, scrollOffset);
+    return await _tapAtTextPositionInTextLayout(
+      textField.textLayout,
+      textField.textLayoutOffsetInField,
+      textFieldBox,
+      offset,
+      textAffinity,
+      scrollOffset,
+      buttons,
+    );
   }
 
   Future<bool> _tapAtTextPositionOnAndroid(
@@ -209,9 +433,18 @@ extension SuperTextFieldRobot on WidgetTester {
     int offset, [
     TextAffinity textAffinity = TextAffinity.downstream,
     Offset scrollOffset = Offset.zero,
+    int buttons = kPrimaryButton,
   ]) async {
     final textFieldBox = textField.context.findRenderObject() as RenderBox;
-    return await _tapAtTextPositionInTextLayout(textField.textLayout, textFieldBox, offset, textAffinity, scrollOffset);
+    return await _tapAtTextPositionInTextLayout(
+      textField.textLayout,
+      textField.textLayoutOffsetInField,
+      textFieldBox,
+      offset,
+      textAffinity,
+      scrollOffset,
+      buttons,
+    );
   }
 
   Future<bool> _tapAtTextPositionOnIOS(
@@ -219,17 +452,28 @@ extension SuperTextFieldRobot on WidgetTester {
     int offset, [
     TextAffinity textAffinity = TextAffinity.downstream,
     Offset scrollOffset = Offset.zero,
+    int buttons = kPrimaryButton,
   ]) async {
     final textFieldBox = textField.context.findRenderObject() as RenderBox;
-    return await _tapAtTextPositionInTextLayout(textField.textLayout, textFieldBox, offset, textAffinity, scrollOffset);
+    return await _tapAtTextPositionInTextLayout(
+      textField.textLayout,
+      textField.textLayoutOffsetInField,
+      textFieldBox,
+      offset,
+      textAffinity,
+      scrollOffset,
+      buttons,
+    );
   }
 
   Future<bool> _tapAtTextPositionInTextLayout(
     TextLayout textLayout,
+    Offset textOffsetInField, // i.e., the padding around the text
     RenderBox textFieldBox,
     int offset, [
     TextAffinity textAffinity = TextAffinity.downstream,
     Offset scrollOffset = Offset.zero,
+    int buttons = kPrimaryButton,
   ]) async {
     final textPositionOffset = textLayout.getOffsetForCaret(
       TextPosition(offset: offset, affinity: textAffinity),
@@ -266,8 +510,11 @@ extension SuperTextFieldRobot on WidgetTester {
       );
     }
 
-    final globalTapOffset = adjustedOffset + textFieldBox.localToGlobal(Offset.zero);
-    await tapAt(globalTapOffset);
+    final globalTapOffset = textOffsetInField + adjustedOffset + textFieldBox.localToGlobal(Offset.zero);
+    await tapAt(
+      globalTapOffset,
+      buttons: buttons,
+    );
     return true;
   }
 

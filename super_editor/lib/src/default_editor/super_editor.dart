@@ -1,6 +1,7 @@
 import 'package:attributed_text/attributed_text.dart';
-import 'package:flutter/foundation.dart' show defaultTargetPlatform;
+import 'package:flutter/foundation.dart' show ValueListenable, defaultTargetPlatform;
 import 'package:flutter/material.dart' hide SelectableText;
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:follow_the_leader/follow_the_leader.dart';
 import 'package:super_editor/src/core/document.dart';
@@ -8,6 +9,7 @@ import 'package:super_editor/src/core/document_composer.dart';
 import 'package:super_editor/src/core/document_debug_paint.dart';
 import 'package:super_editor/src/core/document_interaction.dart';
 import 'package:super_editor/src/core/document_layout.dart';
+import 'package:super_editor/src/core/document_selection.dart';
 import 'package:super_editor/src/core/edit_context.dart';
 import 'package:super_editor/src/core/editor.dart';
 import 'package:super_editor/src/core/styles.dart';
@@ -18,22 +20,25 @@ import 'package:super_editor/src/default_editor/document_gestures_touch_ios.dart
 import 'package:super_editor/src/default_editor/document_scrollable.dart';
 import 'package:super_editor/src/default_editor/layout_single_column/_styler_composing_region.dart';
 import 'package:super_editor/src/default_editor/list_items.dart';
+import 'package:super_editor/src/default_editor/tap_handlers/tap_handlers.dart';
 import 'package:super_editor/src/default_editor/tasks.dart';
-import 'package:super_editor/src/infrastructure/_logging.dart';
 import 'package:super_editor/src/infrastructure/content_layers.dart';
 import 'package:super_editor/src/infrastructure/documents/document_scaffold.dart';
 import 'package:super_editor/src/infrastructure/documents/document_scroller.dart';
 import 'package:super_editor/src/infrastructure/documents/selection_leader_document_layer.dart';
-import 'package:super_editor/src/infrastructure/links.dart';
+import 'package:super_editor/src/infrastructure/flutter/build_context.dart';
 import 'package:super_editor/src/infrastructure/platforms/android/toolbar.dart';
 import 'package:super_editor/src/infrastructure/platforms/ios/toolbar.dart';
 import 'package:super_editor/src/infrastructure/platforms/mac/mac_ime.dart';
 import 'package:super_editor/src/infrastructure/platforms/platform.dart';
 import 'package:super_editor/src/infrastructure/signal_notifier.dart';
 import 'package:super_editor/src/infrastructure/text_input.dart';
+import 'package:super_editor/src/undo_redo.dart';
+import 'package:super_editor/src/infrastructure/render_sliver_ext.dart';
 import 'package:super_text_layout/super_text_layout.dart';
 
 import '../infrastructure/document_gestures_interaction_overrides.dart';
+import '../infrastructure/platforms/ios/ios_system_context_menu.dart';
 import '../infrastructure/platforms/mobile_documents.dart';
 import 'attributions.dart';
 import 'blockquote.dart';
@@ -51,48 +56,46 @@ import 'unknown_component.dart';
 
 /// A rich text editor that displays a document in a single-column layout.
 ///
-/// A [SuperEditor] brings together the key pieces needed
-/// to display a user-editable document:
-///  * document model
-///  * document editor
-///  * document layout
-///  * document interaction (tapping, dragging, typing, scrolling)
-///  * document composer (current selection, and styles to apply to next character)
+/// A [SuperEditor] brings together the key pieces needed to display a user-editable document:
+///  * An editor, which includes a document and a composer (which holds the user selection and styles).
+///  * A document layout, which positions components for every piece of content in the document.
+///  * User interactions with the document layout (tapping, dragging, typing, scrolling)
 ///
-/// A [SuperEditor] determines the visual styling by way of:
+/// A [SuperEditor] applies visual styles based on:
 ///  * [stylesheet], which applies styles throughout the document layout,
 ///    including text styles and block padding.
-///  * [componentStyles], which applies targeted styles to specific components
-///    in the document layout.
-///  * [componentBuilders], which produce every visual component within the document layout.
 ///  * [selectionStyles], which dictates the color of the caret and the color of
 ///    selected text and components
+///  * [componentStyles], which applies targeted styles to specific components
+///    in the document layout.
+///  * [componentBuilders], which produce every visual component [Widget] within the document layout.
 ///
-/// A [SuperEditor] determines how a physical keyboard interacts with the document
-/// by way of [keyboardActions].
+/// [keyboardActions] decides how physical keyboard key presses alter the document within
+/// a [SuperEditor].
 ///
-/// A [SuperEditor] works with software keyboards through the platform's Input Method
-/// Engine (IME). To customize how [SuperEditor] works with the IME, see [imePolicies],
-/// [imeConfiguration], and [softwareKeyboardController].
+/// [imePolicies], [imeConfiguration], and [softwareKeyboardController] decide how user interactions
+/// with the operating system's Input Method Editor (IME) alters the document within a
+/// [SuperEditor].
 ///
 /// ## Deeper explanation of core artifacts:
 ///
-/// The document model is responsible for holding the content of a
-/// document in a structured and query-able manner.
+/// A [Document] is responsible for holding the content of a document in a structured
+/// and query-able manner.
 ///
-/// The document editor is responsible for mutating the document
-/// structure.
+/// A [DocumentComposer] is responsible for holding the user's selection, as well as any inline
+/// text styles that should be applied as the user types.
 ///
-/// Document layout is responsible for positioning and rendering the
-/// various visual components in the document. It's also responsible
-/// for linking logical document nodes to visual document components
-/// to facilitate user interactions like tapping and dragging.
+/// An [Editor] is responsible for executing every request that alters a [Document] or
+/// [DocumentComposer]. The [Editor] provides hooks for reactions, which can further alter
+/// content after a command, such as parsing inline Markdown, or creating hash tags. The
+/// [Editor] implements undo/redo control.
 ///
-/// Document interaction is responsible for taking appropriate actions
-/// in response to user taps, drags, and key presses.
+/// A [DocumentLayout] is responsible for positioning and rendering the various visual
+/// components in the document. It's also responsible for linking logical document nodes
+/// to visual document components to facilitate user interactions like tapping and dragging.
 ///
-/// Document composer is responsible for owning document selection and
-/// the current text entry mode.
+/// Document interaction is responsible for taking appropriate actions in response to user
+/// taps, drags, and key presses.
 class SuperEditor extends StatefulWidget {
   /// Creates a `Super Editor` with common (but configurable) defaults for
   /// visual components, text styles, and user interaction.
@@ -102,8 +105,12 @@ class SuperEditor extends StatefulWidget {
     this.autofocus = false,
     this.tapRegionGroupId,
     required this.editor,
-    required this.document,
-    required this.composer,
+    @Deprecated(
+        "The document is now retrieved from the Editor. You should remove this property from your SuperEditor widget.")
+    this.document,
+    @Deprecated(
+        "The composer is now retrieved from the Editor. You should remove this property from your SuperEditor widget.")
+    this.composer,
     this.scrollController,
     this.documentLayoutKey,
     Stylesheet? stylesheet,
@@ -116,10 +123,11 @@ class SuperEditor extends StatefulWidget {
     this.imePolicies = const SuperEditorImePolicies(),
     this.imeConfiguration,
     this.imeOverrides,
+    this.isImeConnected,
     this.keyboardActions,
     this.selectorHandlers,
     this.gestureMode,
-    this.contentTapDelegateFactory = superEditorLaunchLinkTapHandlerFactory,
+    this.contentTapDelegateFactories = const [superEditorLaunchLinkTapHandlerFactory],
     this.selectionLayerLinks,
     this.documentUnderlayBuilders = const [],
     this.documentOverlayBuilders = defaultSuperEditorDocumentOverlayBuilders,
@@ -131,17 +139,22 @@ class SuperEditor extends StatefulWidget {
     this.createOverlayControlsClipper,
     this.plugins = const {},
     this.debugPaint = const DebugPaintConfig(),
+    this.shrinkWrap = false,
   })  : stylesheet = stylesheet ?? defaultStylesheet,
         selectionStyles = selectionStyle ?? defaultSelectionStyle,
-        componentBuilders = componentBuilders != null
-            ? [...componentBuilders, const UnknownComponentBuilder()]
-            : [...defaultComponentBuilders, const UnknownComponentBuilder()],
+        componentBuilders = [
+          for (final plugin in plugins) ...plugin.componentBuilders,
+          if (componentBuilders != null)
+            ...componentBuilders
+          else ...[...defaultComponentBuilders, TaskComponentBuilder(editor)],
+          const UnknownComponentBuilder(),
+        ],
         super(key: key);
 
   /// [FocusNode] for the entire `SuperEditor`.
   final FocusNode? focusNode;
 
-  /// Whether or not the [SuperEditor] should autofocus
+  /// Whether or not the [SuperEditor] should autofocus upon initial display.
   final bool autofocus;
 
   /// {@template super_editor_tap_region_group_id}
@@ -160,6 +173,33 @@ class SuperEditor extends StatefulWidget {
   /// `scrollController` is not used if this `SuperEditor` has an ancestor
   /// `Scrollable`.
   final ScrollController? scrollController;
+
+  /// An editing pipeline, which is responsible for all changes made to a document from
+  /// this [SuperEditor].
+  ///
+  /// All [SuperEditor] interactions apply changes to a document by submitting requests to
+  /// this [editor]. The [editor] takes requests, runs corresponding commands, runs reactions
+  /// to those commands (e.g., parsing Markdown), and then notifies listeners about what
+  /// changed.
+  ///
+  /// The editing pipeline within the [editor] applies to a set of [Editable]s. These are the
+  /// things that can be changed through editing. For example, every [editor] is expected to
+  /// contain a [MutableDocument] and a [MutableDocumentComposer] within the set of [Editable]s.
+  /// That way, edit commands can alter the document and the composer.
+  ///
+  /// See [Editor] for more details.
+  final Editor editor;
+
+  /// The [Document] that's edited by the [editor].
+  @Deprecated(
+      "The Document is now retrieved from the Editor. You should remove this property from your SuperEditor widget.")
+  final Document? document;
+
+  /// Owns the editor's current selection, the current attributions for
+  /// text input, and other transitive editor configurations.
+  @Deprecated(
+      "The DocumentComposer is now retrieved from the Editor. You should remove this property from your SuperEditor widget.")
+  final DocumentComposer? composer;
 
   /// [GlobalKey] that's bound to the [DocumentLayout] within
   /// this `SuperEditor`.
@@ -228,15 +268,24 @@ class SuperEditor extends StatefulWidget {
   /// behaviors for various IME messages.
   final DeltaTextInputClientDecorator? imeOverrides;
 
+  /// A (optional) notifier that's notified when the IME connection opens or closes.
+  ///
+  /// A `true` value means [SuperEditor] is connected to the platform's IME, a `false`
+  /// value means [SuperEditor] isn't connected to the platforms IME.
+  final ValueNotifier<bool>? isImeConnected;
+
   /// The `SuperEditor` gesture mode, e.g., mouse or touch.
   final DocumentGestureMode? gestureMode;
 
-  /// Factory that creates a [ContentTapDelegate], which is given an
+  /// List of factories that creates a [ContentTapDelegate], which is given an
   /// opportunity to respond to taps on content before the editor, itself.
   ///
   /// A [ContentTapDelegate] might be used, for example, to launch a URL
   /// when a user taps on a link.
-  final SuperEditorContentTapDelegateFactory? contentTapDelegateFactory;
+  ///
+  /// If a handler returns [TapHandlingInstruction.halt], no subsequent handlers
+  /// nor the default tap behavior will be executed.
+  final List<SuperEditorContentTapDelegateFactory>? contentTapDelegateFactories;
 
   /// Leader links that connect leader widgets near the user's selection
   /// to carets, handles, and other things that want to follow the selection.
@@ -246,12 +295,6 @@ class SuperEditor extends StatefulWidget {
   /// user's selection.
   final SelectionLayerLinks? selectionLayerLinks;
 
-  /// Alters the [document] and other artifacts.
-  final Editor editor;
-
-  /// The [Document] that's edited by the [editor].
-  final Document document;
-
   /// Layers that are displayed under the document layout, aligned
   /// with the location and size of the document layout.
   final List<SuperEditorLayerBuilder> documentUnderlayBuilders;
@@ -259,10 +302,6 @@ class SuperEditor extends StatefulWidget {
   /// Layers that are displayed on top of the document layout, aligned
   /// with the location and size of the document layout.
   final List<SuperEditorLayerBuilder> documentOverlayBuilders;
-
-  /// Owns the editor's current selection, the current attributions for
-  /// text input, and other transitive editor configurations.
-  final DocumentComposer composer;
 
   /// Priority list of widget factories that create instances of
   /// each visual component displayed in the document layout, e.g.,
@@ -323,6 +362,10 @@ class SuperEditor extends StatefulWidget {
   /// debugging.
   final DebugPaintConfig debugPaint;
 
+  /// Whether the scroll view used by the editor should shrink-wrap its contents.
+  /// Only used when editor is not inside an scrollable.
+  final bool shrinkWrap;
+
   @override
   SuperEditorState createState() => SuperEditorState();
 }
@@ -355,7 +398,7 @@ class SuperEditorState extends State<SuperEditor> {
   @visibleForTesting
   late SuperEditorContext editContext;
 
-  ContentTapDelegate? _contentTapDelegate;
+  List<ContentTapDelegate>? _contentTapHandlers;
 
   final _dragHandleAutoScroller = ValueNotifier<DragHandleAutoScroller?>(null);
 
@@ -378,13 +421,26 @@ class SuperEditorState extends State<SuperEditor> {
   @visibleForTesting
   SingleColumnLayoutPresenter get presenter => _docLayoutPresenter!;
 
+  late SoftwareKeyboardController _softwareKeyboardController;
+
+  late ValueNotifier<bool> _isImeConnected;
+
   @override
   void initState() {
     super.initState();
 
+    if (widget.editor.maybeDocument == null) {
+      throw Exception(
+          "No Document is available to SuperEditor. The Editor given to SuperEditor must contain a MutableDocument in the set of Editables.");
+    }
+    if (widget.editor.maybeComposer == null) {
+      throw Exception(
+          "No DocumentComposer is available to SuperEditor. The Editor given to SuperEditor must contain a MutableDocumentComposer in the set of Editables.");
+    }
+
     _focusNode = (widget.focusNode ?? FocusNode())..addListener(_onFocusChange);
 
-    _composer = widget.composer;
+    _composer = widget.editor.composer;
 
     _scrollController = widget.scrollController ?? ScrollController();
     _autoScrollController = AutoScrollController();
@@ -392,6 +448,10 @@ class SuperEditorState extends State<SuperEditor> {
     _docLayoutKey = widget.documentLayoutKey ?? GlobalKey();
 
     _selectionLinks = widget.selectionLayerLinks ?? SelectionLayerLinks();
+
+    _softwareKeyboardController = widget.softwareKeyboardController ?? SoftwareKeyboardController();
+
+    _isImeConnected = widget.isImeConnected ?? ValueNotifier(false);
 
     widget.editor.context.put(
       Editor.layoutKey,
@@ -418,8 +478,13 @@ class SuperEditorState extends State<SuperEditor> {
       _selectionLinks = widget.selectionLayerLinks ?? SelectionLayerLinks();
     }
 
-    if (widget.composer != oldWidget.composer) {
-      _composer = widget.composer;
+    if (widget.editor.maybeComposer != oldWidget.editor.composer) {
+      if (widget.editor.maybeComposer == null) {
+        throw Exception(
+            "No DocumentComposer is available to SuperEditor. The Editor given to SuperEditor must contain a MutableDocumentComposer in the set of Editables.");
+      }
+
+      _composer = widget.editor.composer;
     }
 
     if (widget.editor != oldWidget.editor) {
@@ -448,12 +513,24 @@ class SuperEditorState extends State<SuperEditor> {
       _scrollController = widget.scrollController ?? ScrollController();
     }
 
+    if (widget.softwareKeyboardController != oldWidget.softwareKeyboardController) {
+      _softwareKeyboardController = widget.softwareKeyboardController ?? SoftwareKeyboardController();
+    }
+
+    if (widget.isImeConnected != oldWidget.isImeConnected) {
+      _isImeConnected = widget.isImeConnected ?? ValueNotifier(false);
+    }
+
     _recomputeIfLayoutShouldShowCaret();
   }
 
   @override
   void dispose() {
-    _contentTapDelegate?.dispose();
+    if (_contentTapHandlers != null) {
+      for (final handler in _contentTapHandlers!) {
+        handler.dispose();
+      }
+    }
 
     _iosControlsController.dispose();
     _androidControlsController.dispose();
@@ -476,14 +553,15 @@ class SuperEditorState extends State<SuperEditor> {
     _scroller = DocumentScroller()..addScrollChangeListener(_scrollChangeSignal.notifyListeners);
 
     editContext = SuperEditorContext(
+      editorFocusNode: _focusNode,
       editor: widget.editor,
-      document: widget.document,
+      document: widget.editor.document,
       composer: _composer,
       getDocumentLayout: () => _docLayoutKey.currentState as DocumentLayout,
       scroller: _scroller!,
       commonOps: CommonEditorOperations(
         editor: widget.editor,
-        document: widget.document,
+        document: widget.editor.document,
         composer: _composer,
         documentLayoutResolver: () => _docLayoutKey.currentState as DocumentLayout,
       ),
@@ -494,9 +572,13 @@ class SuperEditorState extends State<SuperEditor> {
     }
 
     // The ContentTapDelegate depends upon the EditContext. Recreate the
-    // delegate, now that we've created a new EditContext.
-    _contentTapDelegate?.dispose();
-    _contentTapDelegate = widget.contentTapDelegateFactory?.call(editContext);
+    // handlers, now that we've created a new EditContext.
+    if (_contentTapHandlers != null) {
+      for (final handler in _contentTapHandlers!) {
+        handler.dispose();
+      }
+    }
+    _contentTapHandlers = widget.contentTapDelegateFactories?.map((factory) => factory.call(editContext)).toList();
   }
 
   void _createLayoutPresenter() {
@@ -534,9 +616,12 @@ class SuperEditorState extends State<SuperEditor> {
             composingRegion: editContext.composer.composingRegion,
             showComposingUnderline: true,
           ),
-        // Selection changes are very volatile. Put that phase last
+        // Selection changes are very volatile. Put that phase last,
+        // just before the phases that the app wants to be at the end
         // to minimize view model recalculations.
         _docLayoutSelectionStyler,
+        for (final plugin in widget.plugins) //
+          ...plugin.appendedStylePhases,
       ],
     );
 
@@ -579,6 +664,15 @@ class SuperEditorState extends State<SuperEditor> {
       widget.keyboardActions ??
       (inputSource == TextInputSource.ime ? defaultImeKeyboardActions : defaultKeyboardActions);
 
+  void _openSoftareKeyboard() {
+    if (!_softwareKeyboardController.hasDelegate) {
+      // There is no IME connection. It isn't possible to request the keyboard.
+      return;
+    }
+
+    _softwareKeyboardController.open();
+  }
+
   @override
   Widget build(BuildContext context) {
     return _buildGestureControlsScope(
@@ -590,48 +684,54 @@ class SuperEditorState extends State<SuperEditor> {
           child: EditorSelectionAndFocusPolicy(
             focusNode: _focusNode,
             editor: widget.editor,
-            document: widget.document,
+            document: widget.editor.document,
             selection: _composer.selectionNotifier,
             isDocumentLayoutAvailable: () =>
-                (_docLayoutKey.currentContext?.findRenderObject() as RenderBox?)?.hasSize == true,
+                (_docLayoutKey.currentContext?.findRenderObject() as RenderSliver?)?.hasSize == true,
             getDocumentLayout: () => editContext.documentLayout,
             placeCaretAtEndOfDocumentOnGainFocus: widget.selectionPolicies.placeCaretAtEndOfDocumentOnGainFocus,
             restorePreviousSelectionOnGainFocus: widget.selectionPolicies.restorePreviousSelectionOnGainFocus,
             clearSelectionWhenEditorLosesFocus: widget.selectionPolicies.clearSelectionWhenEditorLosesFocus,
-            child: _buildTextInputSystem(
-              child: _buildPlatformSpecificViewportDecorations(
-                controlsScopeContext,
-                child: DocumentScaffold(
-                  documentLayoutLink: _documentLayoutLink,
-                  documentLayoutKey: _docLayoutKey,
-                  gestureBuilder: _buildGestureInteractor,
-                  scrollController: _scrollController,
-                  autoScrollController: _autoScrollController,
-                  scroller: _scroller,
-                  presenter: presenter,
-                  componentBuilders: widget.componentBuilders,
-                  underlays: [
-                    // Add all underlays that the app wants.
-                    for (final underlayBuilder in widget.documentUnderlayBuilders) //
-                      (context) => underlayBuilder.build(context, editContext),
-                  ],
-                  overlays: [
-                    // Layer that positions and sizes leader widgets at the bounds
-                    // of the users selection so that carets, handles, toolbars, and
-                    // other things can follow the selection.
-                    (context) {
-                      return _SelectionLeadersDocumentLayerBuilder(
-                        links: _selectionLinks,
-                        showDebugLeaderBounds: false,
-                      ).build(context, editContext);
-                    },
-                    // Add all overlays that the app wants.
-                    for (final overlayBuilder in widget.documentOverlayBuilders) //
-                      (context) => overlayBuilder.build(context, editContext),
-                  ],
-                  debugPaint: widget.debugPaint,
-                ),
-              ),
+            child: DocumentScaffold(
+              documentLayoutLink: _documentLayoutLink,
+              documentLayoutKey: _docLayoutKey,
+              viewportDecorationBuilder: _buildPlatformSpecificViewportDecorations,
+              textInputBuilder: _buildTextInputSystem,
+              gestureBuilder: _buildGestureInteractor,
+              scrollController: _scrollController,
+              autoScrollController: _autoScrollController,
+              scroller: _scroller,
+              presenter: presenter,
+              componentBuilders: widget.componentBuilders,
+              shrinkWrap: widget.shrinkWrap,
+              underlays: [
+                // Add all underlays from plugins.
+                for (final plugin in widget.plugins) //
+                  for (final underlayBuilder in plugin.documentUnderlayBuilders) //
+                    (context) => underlayBuilder.build(context, editContext),
+                // Add all underlays that the app wants.
+                for (final underlayBuilder in widget.documentUnderlayBuilders) //
+                  (context) => underlayBuilder.build(context, editContext),
+              ],
+              overlays: [
+                // Layer that positions and sizes leader widgets at the bounds
+                // of the users selection so that carets, handles, toolbars, and
+                // other things can follow the selection.
+                (context) {
+                  return _SelectionLeadersDocumentLayerBuilder(
+                    links: _selectionLinks,
+                    showDebugLeaderBounds: false,
+                  ).build(context, editContext);
+                },
+                // Add all overlays from plugins.
+                for (final plugin in widget.plugins) //
+                  for (final overlayBuilder in plugin.documentOverlayBuilders) //
+                    (context) => overlayBuilder.build(context, editContext),
+                // Add all overlays that the app wants.
+                for (final overlayBuilder in widget.documentOverlayBuilders) //
+                  (context) => overlayBuilder.build(context, editContext),
+              ],
+              debugPaint: widget.debugPaint,
             ),
           ),
         );
@@ -671,7 +771,8 @@ class SuperEditorState extends State<SuperEditor> {
 
   /// Builds the widget tree that applies user input, e.g., key
   /// presses from a keyboard, or text deltas from the IME.
-  Widget _buildTextInputSystem({
+  Widget _buildTextInputSystem(
+    BuildContext context, {
     required Widget child,
   }) {
     switch (inputSource) {
@@ -694,7 +795,7 @@ class SuperEditorState extends State<SuperEditor> {
           editContext: editContext,
           clearSelectionWhenEditorLosesFocus: widget.selectionPolicies.clearSelectionWhenEditorLosesFocus,
           clearSelectionWhenImeConnectionCloses: widget.selectionPolicies.clearSelectionWhenImeConnectionCloses,
-          softwareKeyboardController: widget.softwareKeyboardController,
+          softwareKeyboardController: _softwareKeyboardController,
           imePolicies: widget.imePolicies,
           imeConfiguration: widget.imeConfiguration ??
               SuperEditorImeConfiguration(
@@ -707,6 +808,7 @@ class SuperEditorState extends State<SuperEditor> {
             ..._keyboardActions,
           ],
           selectorHandlers: widget.selectorHandlers ?? defaultEditorSelectorHandlers,
+          isImeConnected: _isImeConnected,
           child: child,
         );
     }
@@ -732,9 +834,9 @@ class SuperEditorState extends State<SuperEditor> {
           child: SuperEditorIosMagnifierOverlayManager(
             child: EditorFloatingCursor(
               editor: widget.editor,
-              document: widget.document,
+              document: widget.editor.document,
               getDocumentLayout: () => _docLayoutKey.currentState as DocumentLayout,
-              selection: widget.composer.selectionNotifier,
+              selection: widget.editor.composer.selectionNotifier,
               scrollChangeSignal: _scrollChangeSignal,
               child: child,
             ),
@@ -756,6 +858,7 @@ class SuperEditorState extends State<SuperEditor> {
             mobileToolbarKey,
             editContext.commonOps,
             SuperEditorAndroidControlsScope.rootOf(context),
+            editContext.composer.selectionNotifier,
           ),
           child: child,
         );
@@ -764,7 +867,10 @@ class SuperEditorState extends State<SuperEditor> {
     }
   }
 
-  Widget _buildGestureInteractor(BuildContext context) {
+  Widget _buildGestureInteractor(BuildContext context, {required Widget child}) {
+    // Ensure that gesture object fill entire viewport when not being
+    // in user specified scrollable.
+    final fillViewport = context.findAncestorScrollableWithVerticalScroll == null;
     switch (gestureMode) {
       case DocumentGestureMode.mouse:
         return DocumentMouseInteractor(
@@ -774,9 +880,15 @@ class SuperEditorState extends State<SuperEditor> {
           getDocumentLayout: () => editContext.documentLayout,
           selectionChanges: editContext.composer.selectionChanges,
           selectionNotifier: editContext.composer.selectionNotifier,
-          contentTapHandler: _contentTapDelegate,
+          contentTapHandlers: [
+            ..._contentTapHandlers ?? [],
+            for (final plugin in widget.plugins) //
+              ...plugin.contentTapHandlers,
+          ],
           autoScroller: _autoScrollController,
+          fillViewport: fillViewport,
           showDebugPaint: widget.debugPaint.gestures,
+          child: child,
         );
       case DocumentGestureMode.android:
         return AndroidDocumentTouchInteractor(
@@ -785,10 +897,18 @@ class SuperEditorState extends State<SuperEditor> {
           document: editContext.document,
           getDocumentLayout: () => editContext.documentLayout,
           selection: editContext.composer.selectionNotifier,
-          contentTapHandler: _contentTapDelegate,
+          openKeyboardWhenTappingExistingSelection: widget.selectionPolicies.openKeyboardWhenTappingExistingSelection,
+          openSoftwareKeyboard: _openSoftareKeyboard,
+          contentTapHandlers: [
+            ..._contentTapHandlers ?? [],
+            for (final plugin in widget.plugins) //
+              ...plugin.contentTapHandlers,
+          ],
           scrollController: _scrollController,
           dragHandleAutoScroller: _dragHandleAutoScroller,
+          fillViewport: fillViewport,
           showDebugPaint: widget.debugPaint.gestures,
+          child: child,
         );
       case DocumentGestureMode.iOS:
         return IosDocumentTouchInteractor(
@@ -797,13 +917,51 @@ class SuperEditorState extends State<SuperEditor> {
           document: editContext.document,
           getDocumentLayout: () => editContext.documentLayout,
           selection: editContext.composer.selectionNotifier,
-          contentTapHandler: _contentTapDelegate,
+          openKeyboardWhenTappingExistingSelection: widget.selectionPolicies.openKeyboardWhenTappingExistingSelection,
+          openSoftwareKeyboard: _openSoftareKeyboard,
+          isImeConnected: _isImeConnected,
+          contentTapHandlers: [
+            ..._contentTapHandlers ?? [],
+            for (final plugin in widget.plugins) //
+              ...plugin.contentTapHandlers,
+          ],
           scrollController: _scrollController,
           dragHandleAutoScroller: _dragHandleAutoScroller,
+          fillViewport: fillViewport,
           showDebugPaint: widget.debugPaint.gestures,
+          child: child,
         );
     }
   }
+}
+
+/// A [DocumentFloatingToolbarBuilder] that displays the iOS system popover toolbar, if the version of
+/// iOS is recent enough, otherwise builds [defaultIosEditorToolbarBuilder].
+Widget iOSSystemPopoverEditorToolbarWithFallbackBuilder(
+  BuildContext context,
+  Key floatingToolbarKey,
+  LeaderLink focalPoint,
+  CommonEditorOperations editorOps,
+  SuperEditorIosControlsController editorControlsController,
+) {
+  if (CurrentPlatform.isWeb) {
+    // On web, we defer to the browser's internal overlay controls for mobile.
+    return const SizedBox();
+  }
+
+  if (IOSSystemContextMenu.isSupported(context)) {
+    return IOSSystemContextMenu(
+      leaderLink: focalPoint,
+    );
+  }
+
+  return defaultIosEditorToolbarBuilder(
+    context,
+    floatingToolbarKey,
+    focalPoint,
+    editorOps,
+    editorControlsController,
+  );
 }
 
 /// Builds a standard editor-style iOS floating toolbar.
@@ -875,11 +1033,13 @@ Widget defaultAndroidEditorToolbarBuilder(
   Key floatingToolbarKey,
   CommonEditorOperations editorOps,
   SuperEditorAndroidControlsController editorControlsController,
+  ValueListenable<DocumentSelection?> selectionNotifier,
 ) {
   return DefaultAndroidEditorToolbar(
     floatingToolbarKey: floatingToolbarKey,
     editorOps: editorOps,
     editorControlsController: editorControlsController,
+    selectionNotifier: selectionNotifier,
   );
 }
 
@@ -890,20 +1050,31 @@ class DefaultAndroidEditorToolbar extends StatelessWidget {
     this.floatingToolbarKey,
     required this.editorOps,
     required this.editorControlsController,
+    required this.selectionNotifier,
   });
 
   final Key? floatingToolbarKey;
   final CommonEditorOperations editorOps;
   final SuperEditorAndroidControlsController editorControlsController;
+  final ValueListenable<DocumentSelection?> selectionNotifier;
 
   @override
   Widget build(BuildContext context) {
-    return AndroidTextEditingFloatingToolbar(
-      floatingToolbarKey: floatingToolbarKey,
-      onCopyPressed: _copy,
-      onCutPressed: _cut,
-      onPastePressed: _paste,
-      onSelectAllPressed: _selectAll,
+    return ValueListenableBuilder(
+      valueListenable: selectionNotifier,
+      builder: (context, selection, child) {
+        return AndroidTextEditingFloatingToolbar(
+          floatingToolbarKey: floatingToolbarKey,
+          onCopyPressed: selection == null || !selection.isCollapsed //
+              ? _copy
+              : null,
+          onCutPressed: selection == null || !selection.isCollapsed //
+              ? _cut
+              : null,
+          onPastePressed: _paste,
+          onSelectAllPressed: _selectAll,
+        );
+      },
     );
   }
 
@@ -934,7 +1105,10 @@ class DefaultAndroidEditorToolbar extends StatelessWidget {
 class _SelectionLeadersDocumentLayerBuilder implements SuperEditorLayerBuilder {
   const _SelectionLeadersDocumentLayerBuilder({
     required this.links,
-    // ignore: unused_element
+    // TODO(srawlins): `unused_element`, when reporting a parameter, is being
+    // renamed to `unused_element_parameter`. For now, ignore each; when the SDK
+    // constraint is >= 3.6.0, just ignore `unused_element_parameter`.
+    // ignore: unused_element, unused_element_parameter
     this.showDebugLeaderBounds = false,
   });
 
@@ -968,10 +1142,12 @@ class _SelectionLeadersDocumentLayerBuilder implements SuperEditorLayerBuilder {
 /// [componentBuilders].
 ///
 /// An [Editor] is a logical pipeline of requests, commands, and reactions. It has no direct
-/// connection to a user interface. A [SuperEditor] widget is a complete editor user interface.
-/// When a plugin is given to a [SuperEditor] widget, the [SuperEditor] widget [attach]s the
-/// plugin to its [Editor], and then the [SuperEditor] widget pulls out UI related behaviors
-/// from the plugin for things like keyboard handlers and component builders.
+/// connection to a user interface.
+///
+/// A [SuperEditor] widget is a complete editor user interface. When a plugin is given to a
+/// [SuperEditor] widget, the [SuperEditor] widget [attach]s the plugin to its [Editor], and
+/// then the [SuperEditor] widget pulls out UI related behaviors from the plugin for things
+/// like keyboard handlers and component builders.
 ///
 /// [Editor] extensions are applied differently than the [SuperEditor] UI extensions, because
 /// an [Editor] is mutable, meaning it can be altered. But a [SuperEditor] widget, like all other
@@ -980,6 +1156,8 @@ class _SelectionLeadersDocumentLayerBuilder implements SuperEditorLayerBuilder {
 /// from the plugin, so that the [SuperEditor] widget can pass those extensions as properties
 /// during a widget build.
 abstract class SuperEditorPlugin {
+  const SuperEditorPlugin();
+
   /// Adds desired behaviors to the given [editor].
   void attach(Editor editor) {}
 
@@ -991,6 +1169,22 @@ abstract class SuperEditorPlugin {
 
   /// Additional [ComponentBuilder]s that will be added to a given [SuperEditor] widget.
   List<ComponentBuilder> get componentBuilders => [];
+
+  /// Additional underlay [SuperEditorLayerBuilder]s that will be added to a given [SuperEditor].
+  List<SuperEditorLayerBuilder> get documentUnderlayBuilders => [];
+
+  /// Additional overlay [SuperEditorLayerBuilder]s that will be added to a given [SuperEditor].
+  List<SuperEditorLayerBuilder> get documentOverlayBuilders => [];
+
+  /// Optional handlers that respond to taps on content, e.g., opening
+  /// a link when the user taps on text with a link attribution.
+  ///
+  /// If a handler returns [TapHandlingInstruction.halt], no subsequent handlers
+  /// nor the default tap behavior will be executed.
+  List<ContentTapDelegate> get contentTapHandlers => const [];
+
+  /// Custom style phases that are added to the very end of the [SuperEditor] style phases.
+  List<SingleColumnLayoutStylePhase> get appendedStylePhases => const [];
 }
 
 /// A collection of policies that dictate how a [SuperEditor]'s selection will change
@@ -999,6 +1193,7 @@ class SuperEditorSelectionPolicies {
   const SuperEditorSelectionPolicies({
     this.placeCaretAtEndOfDocumentOnGainFocus = true,
     this.restorePreviousSelectionOnGainFocus = true,
+    this.openKeyboardWhenTappingExistingSelection = true,
     this.clearSelectionWhenEditorLosesFocus = true,
     this.clearSelectionWhenImeConnectionCloses = true,
   });
@@ -1012,6 +1207,30 @@ class SuperEditorSelectionPolicies {
   /// Whether the editor's previous selection should be restored when the editor re-gains
   /// focus, after having previous lost focus.
   final bool restorePreviousSelectionOnGainFocus;
+
+  /// {@template openKeyboardWhenTappingExistingSelection}
+  /// Whether the software keyboard should be opened when the user taps on the existing
+  /// selection.
+  ///
+  /// Defaults to `true`.
+  ///
+  /// Typically, when an editor has a selection, the software keyboard is already open.
+  /// However, in some cases, the user might want to temporarily close the keyboard. For
+  /// example, the user might replace the keyboard with a custom emoji picker panel.
+  ///
+  /// When the user is done with the temporary keyboard replacement, the user then wants to
+  /// open the keyboard again, so the user taps on the caret. If this property is `true`
+  /// then tapping on the caret will open the keyboard again.
+  ///
+  /// In other, similar cases, the user might want to be able to tap on the editor without
+  /// opening the keyboard. For example, the user might open a keyboard panel that can insert
+  /// various types of content. In that case, the user might want to move the caret to then
+  /// insert something from the panel. In this case, it's easy to accidentally tap on the
+  /// existing caret, which would then close the panel and open the keyboard. To avoid this
+  /// annoyance, this property can be set to `false`, in which case tapping on the caret won't
+  /// automatically open the keyboard. It's left to the app to re-open the keyboard when desired.
+  /// {@endtemplate}
+  final bool openKeyboardWhenTappingExistingSelection;
 
   /// Whether the editor's selection should be removed when the editor loses
   /// all focus (not just primary focus).
@@ -1081,6 +1300,7 @@ class DefaultCaretOverlayBuilder implements SuperEditorLayerBuilder {
     ),
     this.platformOverride,
     this.displayOnAllPlatforms = false,
+    this.displayCaretWithExpandedSelection = true,
     this.blinkTimingMode = BlinkTimingMode.ticker,
   });
 
@@ -1095,6 +1315,11 @@ class DefaultCaretOverlayBuilder implements SuperEditorLayerBuilder {
   /// By default, the caret is only displayed on desktop.
   final bool displayOnAllPlatforms;
 
+  /// Whether to display the caret when the selection is expanded.
+  ///
+  /// Defaults to `true`.
+  final bool displayCaretWithExpandedSelection;
+
   /// The timing mechanism used to blink, e.g., `Ticker` or `Timer`.
   ///
   /// `Timer`s are not expected to work in tests.
@@ -1108,6 +1333,7 @@ class DefaultCaretOverlayBuilder implements SuperEditorLayerBuilder {
       caretStyle: caretStyle,
       platformOverride: platformOverride,
       displayOnAllPlatforms: displayOnAllPlatforms,
+      displayCaretWithExpandedSelection: displayCaretWithExpandedSelection,
       blinkTimingMode: blinkTimingMode,
     );
   }
@@ -1127,7 +1353,7 @@ const defaultComponentBuilders = <ComponentBuilder>[
 
 /// Default list of document overlays that are displayed on top of the document
 /// layout in a [SuperEditor].
-const defaultSuperEditorDocumentOverlayBuilders = [
+const defaultSuperEditorDocumentOverlayBuilders = <SuperEditorLayerBuilder>[
   // Adds a Leader around the document selection at a focal point for the
   // iOS floating toolbar.
   SuperEditorIosToolbarFocalPointDocumentLayerBuilder(),
@@ -1155,6 +1381,8 @@ final defaultKeyboardActions = <DocumentKeyboardAction>[
   pasteWhenCmdVIsPressed,
   copyWhenCmdCIsPressed,
   cutWhenCmdXIsPressed,
+  undoWhenCmdZOrCtrlZIsPressed,
+  redoWhenCmdShiftZOrCtrlShiftZIsPressed,
   collapseSelectionWhenEscIsPressed,
   selectAllWhenCmdAIsPressed,
   moveLeftAndRightWithArrowKeys,
@@ -1164,12 +1392,19 @@ final defaultKeyboardActions = <DocumentKeyboardAction>[
   tabToIndentListItem,
   shiftTabToUnIndentListItem,
   backspaceToUnIndentListItem,
+  tabToIndentTask,
+  shiftTabToUnIndentTask,
+  backspaceToUnIndentTask,
+  tabToIndentParagraph,
+  shiftTabToUnIndentParagraph,
+  backspaceToUnIndentParagraph,
   backspaceToConvertTaskToParagraph,
   backspaceToClearParagraphBlockType,
   cmdBToToggleBold,
   cmdIToToggleItalics,
   shiftEnterToInsertNewlineInBlock,
   enterToInsertNewTask,
+  enterToUnIndentParagraph,
   enterToInsertBlockNewline,
   moveToLineStartOrEndWithCtrlAOrE,
   deleteToStartOfLineWithCmdBackspaceOnMac,
@@ -1196,12 +1431,22 @@ final defaultImeKeyboardActions = <DocumentKeyboardAction>[
   pasteWhenCmdVIsPressed,
   copyWhenCmdCIsPressed,
   cutWhenCmdXIsPressed,
+  undoWhenCmdZOrCtrlZIsPressed,
+  redoWhenCmdShiftZOrCtrlShiftZIsPressed,
   selectAllWhenCmdAIsPressed,
   cmdBToToggleBold,
   cmdIToToggleItalics,
   doNothingWithBackspaceOnWeb,
+  doNothingWithCtrlOrCmdAndZOnWeb,
+  tabToIndentTask,
+  shiftTabToUnIndentTask,
+  backspaceToUnIndentTask,
+  tabToIndentParagraph,
+  shiftTabToUnIndentParagraph,
+  backspaceToUnIndentParagraph,
   backspaceToConvertTaskToParagraph,
   backspaceToUnIndentListItem,
+  enterToUnIndentParagraph,
   backspaceToClearParagraphBlockType,
   deleteDownstreamCharacterWithCtrlDeleteOnMac,
   scrollOnCtrlOrCmdAndHomeKeyPress,
@@ -1217,6 +1462,7 @@ final defaultImeKeyboardActions = <DocumentKeyboardAction>[
   scrollOnPageUpKeyPress,
   scrollOnPageDownKeyPress,
   moveUpAndDownWithArrowKeys,
+  moveToStartOrEndOfLineWithArrowKeysOnWeb,
   doNothingWithLeftRightArrowKeysAtMiddleOfTextOnWeb,
   moveLeftAndRightWithArrowKeys,
   moveToLineStartWithHome,
@@ -1412,6 +1658,7 @@ final defaultStylesheet = Stylesheet(
     ),
   ],
   inlineTextStyler: defaultInlineTextStyler,
+  inlineWidgetBuilders: defaultInlineWidgetBuilderChain,
 );
 
 TextStyle defaultInlineTextStyler(Set<Attribution> attributions, TextStyle existingStyle) {
@@ -1443,9 +1690,29 @@ TextStyle defaultStyleBuilder(Set<Attribution> attributions) {
             ? TextDecoration.lineThrough
             : TextDecoration.combine([TextDecoration.lineThrough, newStyle.decoration!]),
       );
+    } else if (attribution == superscriptAttribution) {
+      newStyle = newStyle.copyWith(
+        fontFeatures: [const FontFeature.superscripts()],
+      );
+    } else if (attribution == subscriptAttribution) {
+      newStyle = newStyle.copyWith(
+        fontFeatures: [const FontFeature.subscripts()],
+      );
     } else if (attribution is ColorAttribution) {
       newStyle = newStyle.copyWith(
         color: attribution.color,
+      );
+    } else if (attribution is BackgroundColorAttribution) {
+      newStyle = newStyle.copyWith(
+        backgroundColor: attribution.color,
+      );
+    } else if (attribution is FontSizeAttribution) {
+      newStyle = newStyle.copyWith(
+        fontSize: attribution.fontSize,
+      );
+    } else if (attribution is FontFamilyAttribution) {
+      newStyle = newStyle.copyWith(
+        fontFamily: attribution.fontFamily,
       );
     } else if (attribution is LinkAttribution) {
       newStyle = newStyle.copyWith(
@@ -1461,81 +1728,3 @@ TextStyle defaultStyleBuilder(Set<Attribution> attributions) {
 const defaultSelectionStyle = SelectionStyles(
   selectionColor: Color(0xFFACCEF7),
 );
-
-typedef SuperEditorContentTapDelegateFactory = ContentTapDelegate Function(SuperEditorContext editContext);
-
-SuperEditorLaunchLinkTapHandler superEditorLaunchLinkTapHandlerFactory(SuperEditorContext editContext) =>
-    SuperEditorLaunchLinkTapHandler(editContext.document, editContext.composer);
-
-/// A [ContentTapDelegate] that opens links when the user taps text with
-/// a [LinkAttribution].
-///
-/// This delegate only opens links when [composer.isInInteractionMode] is
-/// `true`.
-class SuperEditorLaunchLinkTapHandler extends ContentTapDelegate {
-  SuperEditorLaunchLinkTapHandler(this.document, this.composer) {
-    composer.isInInteractionMode.addListener(notifyListeners);
-  }
-
-  @override
-  void dispose() {
-    composer.isInInteractionMode.removeListener(notifyListeners);
-    super.dispose();
-  }
-
-  final Document document;
-  final DocumentComposer composer;
-
-  @override
-  MouseCursor? mouseCursorForContentHover(DocumentPosition hoverPosition) {
-    if (!composer.isInInteractionMode.value) {
-      // The editor isn't in "interaction mode". We don't want a special cursor
-      return null;
-    }
-
-    final link = _getLinkAtPosition(hoverPosition);
-    return link != null ? SystemMouseCursors.click : null;
-  }
-
-  @override
-  TapHandlingInstruction onTap(DocumentPosition tapPosition) {
-    if (!composer.isInInteractionMode.value) {
-      // The editor isn't in "interaction mode". We don't want to allow
-      // users to open links by tapping on them.
-      return TapHandlingInstruction.continueHandling;
-    }
-
-    final link = _getLinkAtPosition(tapPosition);
-    if (link != null) {
-      // The user tapped on a link. Launch it.
-      UrlLauncher.instance.launchUrl(link);
-      return TapHandlingInstruction.halt;
-    } else {
-      // The user didn't tap on a link.
-      return TapHandlingInstruction.continueHandling;
-    }
-  }
-
-  Uri? _getLinkAtPosition(DocumentPosition position) {
-    final nodePosition = position.nodePosition;
-    if (nodePosition is! TextNodePosition) {
-      return null;
-    }
-
-    final textNode = document.getNodeById(position.nodeId);
-    if (textNode is! TextNode) {
-      editorGesturesLog
-          .shout("Received a report of a tap on a TextNodePosition, but the node with that ID is a: $textNode");
-      return null;
-    }
-
-    final tappedAttributions = textNode.text.getAllAttributionsAt(nodePosition.offset);
-    for (final tappedAttribution in tappedAttributions) {
-      if (tappedAttribution is LinkAttribution) {
-        return tappedAttribution.url;
-      }
-    }
-
-    return null;
-  }
-}

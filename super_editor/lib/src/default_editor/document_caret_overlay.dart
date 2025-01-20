@@ -19,6 +19,7 @@ class CaretDocumentOverlay extends DocumentLayoutLayerStatefulWidget {
     ),
     this.platformOverride,
     this.displayOnAllPlatforms = false,
+    this.displayCaretWithExpandedSelection = true,
     this.blinkTimingMode = BlinkTimingMode.ticker,
   }) : super(key: key);
 
@@ -40,16 +41,22 @@ class CaretDocumentOverlay extends DocumentLayoutLayerStatefulWidget {
   /// By default, the caret is only displayed on desktop.
   final bool displayOnAllPlatforms;
 
+  /// Whether to display the caret when the selection is expanded.
+  ///
+  /// Defaults to `true`.
+  final bool displayCaretWithExpandedSelection;
+
   /// The timing mechanism used to blink, e.g., `Ticker` or `Timer`.
   ///
   /// `Timer`s are not expected to work in tests.
   final BlinkTimingMode blinkTimingMode;
 
   @override
-  DocumentLayoutLayerState<CaretDocumentOverlay, Rect?> createState() => _CaretDocumentOverlayState();
+  DocumentLayoutLayerState<CaretDocumentOverlay, Rect?> createState() => CaretDocumentOverlayState();
 }
 
-class _CaretDocumentOverlayState extends DocumentLayoutLayerState<CaretDocumentOverlay, Rect?>
+@visibleForTesting
+class CaretDocumentOverlayState extends DocumentLayoutLayerState<CaretDocumentOverlay, Rect?>
     with SingleTickerProviderStateMixin {
   late final BlinkController _blinkController;
 
@@ -90,6 +97,20 @@ class _CaretDocumentOverlayState extends DocumentLayoutLayerState<CaretDocumentO
     super.dispose();
   }
 
+  @visibleForTesting
+  bool get isCaretVisible => _blinkController.opacity == 1.0 && !_shouldHideCaretForExpandedSelection;
+
+  /// Returns `true` if the selection is currently expanded, and we want to hide the caret when
+  /// the selection is expanded.
+  ///
+  /// Returns `false` if the selection is collapsed or `null`, or if we want to show the caret
+  /// when the selection is expanded.
+  bool get _shouldHideCaretForExpandedSelection =>
+      !widget.displayCaretWithExpandedSelection && widget.composer.selection?.isCollapsed == false;
+
+  @visibleForTesting
+  Duration get caretFlashPeriod => _blinkController.flashPeriod;
+
   void _onSelectionChange() {
     _updateCaretFlash();
 
@@ -129,7 +150,8 @@ class _CaretDocumentOverlayState extends DocumentLayoutLayerState<CaretDocumentO
   }
 
   @override
-  Rect? computeLayoutDataWithDocumentLayout(BuildContext context, DocumentLayout documentLayout) {
+  Rect? computeLayoutDataWithDocumentLayout(
+      BuildContext contentLayersContext, BuildContext documentContext, DocumentLayout documentLayout) {
     final documentSelection = widget.composer.selection;
     if (documentSelection == null) {
       return null;
@@ -143,7 +165,23 @@ class _CaretDocumentOverlayState extends DocumentLayoutLayerState<CaretDocumentO
       return null;
     }
 
-    return documentLayout.getRectForPosition(documentSelection.extent)!;
+    Rect caretRect =
+        documentLayout.getEdgeForPosition(documentSelection.extent)!.translate(-widget.caretStyle.width / 2, 0.0);
+
+    final overlayBox = context.findRenderObject() as RenderBox?;
+    if (overlayBox != null && overlayBox.hasSize && caretRect.left + widget.caretStyle.width >= overlayBox.size.width) {
+      // Ajust the caret position to make it entirely visible because it's currently placed
+      // partially or entirely outside of the layers' bounds. This can happen for downstream selections
+      // of block components that take all the available width.
+      caretRect = Rect.fromLTWH(
+        overlayBox.size.width - widget.caretStyle.width,
+        caretRect.top,
+        caretRect.width,
+        caretRect.height,
+      );
+    }
+
+    return caretRect;
   }
 
   @override
@@ -156,11 +194,16 @@ class _CaretDocumentOverlayState extends DocumentLayoutLayerState<CaretDocumentO
       return const SizedBox();
     }
 
+    if (_shouldHideCaretForExpandedSelection) {
+      return const SizedBox();
+    }
+
     // Use a RepaintBoundary so that caret flashing doesn't invalidate our
     // ancestor painting.
     return IgnorePointer(
       child: RepaintBoundary(
         child: Stack(
+          clipBehavior: Clip.none,
           children: [
             if (caret != null)
               Positioned(
@@ -174,7 +217,7 @@ class _CaretDocumentOverlayState extends DocumentLayoutLayerState<CaretDocumentO
                       key: DocumentKeys.caret,
                       width: widget.caretStyle.width,
                       decoration: BoxDecoration(
-                        color: widget.caretStyle.color.withOpacity(_blinkController.opacity),
+                        color: widget.caretStyle.color.withValues(alpha: _blinkController.opacity),
                         borderRadius: widget.caretStyle.borderRadius,
                       ),
                     );

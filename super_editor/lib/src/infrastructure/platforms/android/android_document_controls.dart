@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:follow_the_leader/follow_the_leader.dart';
 import 'package:super_editor/src/core/document.dart';
 import 'package:super_editor/src/core/document_composer.dart';
@@ -14,6 +15,7 @@ import 'package:super_editor/src/infrastructure/documents/document_layers.dart';
 import 'package:super_editor/src/infrastructure/documents/selection_leader_document_layer.dart';
 import 'package:super_editor/src/infrastructure/flutter/flutter_scheduler.dart';
 import 'package:super_editor/src/infrastructure/platforms/mobile_documents.dart';
+import 'package:super_editor/src/infrastructure/render_sliver_ext.dart';
 import 'package:super_text_layout/super_text_layout.dart';
 
 /// A document layer that positions a leader widget around the user's selection,
@@ -86,7 +88,8 @@ class _AndroidToolbarFocalPointDocumentLayerState
   }
 
   @override
-  Rect? computeLayoutDataWithDocumentLayout(BuildContext context, DocumentLayout documentLayout) {
+  Rect? computeLayoutDataWithDocumentLayout(
+      BuildContext contentLayersContext, BuildContext documentContext, DocumentLayout documentLayout) {
     final documentSelection = widget.selection.value;
     if (documentSelection == null) {
       return null;
@@ -151,6 +154,7 @@ class AndroidHandlesDocumentLayer extends DocumentLayoutLayerStatefulWidget {
     required this.documentLayout,
     required this.selection,
     required this.changeSelection,
+    this.caretWidth = 2,
     this.caretColor,
     this.showDebugPaint = false,
   });
@@ -162,6 +166,8 @@ class AndroidHandlesDocumentLayer extends DocumentLayoutLayerStatefulWidget {
   final ValueListenable<DocumentSelection?> selection;
 
   final void Function(DocumentSelection?, SelectionChangeType, String selectionReason) changeSelection;
+
+  final double caretWidth;
 
   /// Color used to render the Android-style caret (not handles), by default the color
   /// is retrieved from the root [SuperEditorAndroidControlsController].
@@ -187,7 +193,7 @@ class AndroidControlsDocumentLayerState
   @override
   void initState() {
     super.initState();
-    _caretBlinkController = BlinkController(tickerProvider: this);
+    _caretBlinkController = BlinkController.withTimer();
 
     _previousSelection = widget.selection.value;
     widget.selection.addListener(_onSelectionChange);
@@ -200,11 +206,22 @@ class AndroidControlsDocumentLayerState
     if (_controlsController != null) {
       _controlsController!.shouldCaretBlink.removeListener(_onBlinkModeChange);
       _controlsController!.caretJumpToOpaqueSignal.removeListener(_caretJumpToOpaque);
+      _controlsController!.shouldShowCollapsedHandle.removeListener(_onShouldShowCollapsedHandleChange);
+      _controlsController!.areSelectionHandlesAllowed.removeListener(_onSelectionHandlesAllowedChange);
     }
 
     _controlsController = SuperEditorAndroidControlsScope.rootOf(context);
     _controlsController!.shouldCaretBlink.addListener(_onBlinkModeChange);
     _controlsController!.caretJumpToOpaqueSignal.addListener(_caretJumpToOpaque);
+    _controlsController!.areSelectionHandlesAllowed.addListener(_onSelectionHandlesAllowedChange);
+
+    /// Listen for changes about whether we want to show the collapsed handle
+    /// or whether we want to show expanded handles for a selection. We listen to
+    /// this because there are some situations where the desired handle type is
+    /// ambiguous, such as when when the user drags an expanded handle such that
+    /// the selection collapses. In that case, the selection is collapsed but we want
+    /// to show the expanded handle. This signal clarifies which one we want.
+    _controlsController!.shouldShowCollapsedHandle.addListener(_onShouldShowCollapsedHandleChange);
     _onBlinkModeChange();
   }
 
@@ -222,6 +239,8 @@ class AndroidControlsDocumentLayerState
   void dispose() {
     widget.selection.removeListener(_onSelectionChange);
     _controlsController?.shouldCaretBlink.removeListener(_onBlinkModeChange);
+    _controlsController!.shouldShowCollapsedHandle.removeListener(_onShouldShowCollapsedHandleChange);
+    _controlsController!.areSelectionHandlesAllowed.removeListener(_onSelectionHandlesAllowedChange);
 
     _caretBlinkController.dispose();
     super.dispose();
@@ -235,6 +254,12 @@ class AndroidControlsDocumentLayerState
 
   @visibleForTesting
   bool get isCaretDisplayed => layoutData?.caret != null;
+
+  @visibleForTesting
+  bool get isCaretVisible => _caretBlinkController.opacity == 1.0 && isCaretDisplayed;
+
+  @visibleForTesting
+  Duration get caretFlashPeriod => _caretBlinkController.flashPeriod;
 
   @visibleForTesting
   bool get isUpstreamHandleDisplayed => layoutData?.upstream != null;
@@ -276,17 +301,72 @@ class AndroidControlsDocumentLayerState
     _caretBlinkController.jumpToOpaque();
   }
 
+  void _onShouldShowCollapsedHandleChange() {
+    // The controller went from wanting a collapsed handle to wanting expanded handles,
+    // or vis-a-versa. This signal is relevant to us because of an ambiguous handle situation.
+    // The user might drag an expanded handle such  that the selection is collapsed, in which
+    // case we still want to show an expanded handle. Similarly, if the user then releases that
+    // expanded handle, we should switch to a collapsed handle for the same selection. This
+    // method tells us that the desired handle type has changed. Re-run layout and build to
+    // ensure that we're showing the correct handle.
+    setState(() {
+      //
+    });
+  }
+
+  void _onSelectionHandlesAllowedChange() {
+    setState(() {
+      // The controller went from allowing selection handles to disallowing them, or vis-a-versa.
+      // Rebuild this widget to show/hide the handles.
+    });
+  }
+
   @override
-  DocumentSelectionLayout? computeLayoutDataWithDocumentLayout(BuildContext context, DocumentLayout documentLayout) {
+  DocumentSelectionLayout? computeLayoutDataWithDocumentLayout(
+      BuildContext contentLayersContext, BuildContext documentContext, DocumentLayout documentLayout) {
     final selection = widget.selection.value;
     if (selection == null) {
       return null;
     }
 
-    if (selection.isCollapsed) {
+    if (!_controlsController!.areSelectionHandlesAllowed.value) {
+      // We don't want to show any selection handles.
+      return null;
+    }
+
+    if (selection.isCollapsed && !_controlsController!.shouldShowExpandedHandles.value) {
+      Rect caretRect = documentLayout.getEdgeForPosition(selection.extent)!;
+
+      // Default caret width used by the Android caret.
+      const caretWidth = 2;
+
+      // Use the content's RenderBox instead of the layer's RenderBox to get the layer's width.
+      //
+      // ContentLayers works in four steps:
+      //
+      // 1. The content is built.
+      // 2. The content is laid out.
+      // 3. The layers are built.
+      // 4. The layers are laid out.
+      //
+      // The computeLayoutData method is called during the layer's build, which means that the
+      // layer's RenderBox is outdated, because it wasn't laid out yet for the current frame.
+      // Use the content's RenderBox, which was already laid out for the current frame.
+      final contentBox = documentContext.findRenderObject() as RenderSliver?;
+      if (contentBox != null && contentBox.hasSize && caretRect.left + caretWidth >= contentBox.size.width) {
+        // Ajust the caret position to make it entirely visible because it's currently placed
+        // partially or entirely outside of the layers' bounds. This can happen for downstream selections
+        // of block components that take all the available width.
+        caretRect = Rect.fromLTWH(
+          contentBox.size.width - caretWidth,
+          caretRect.top,
+          caretRect.width,
+          caretRect.height,
+        );
+      }
+
       return DocumentSelectionLayout(
-        // TODO: Replace "getRectForSelection()" with "getRectForPosition()" after #1614
-        caret: documentLayout.getRectForSelection(selection.extent, selection.extent)!,
+        caret: caretRect,
       );
     } else {
       return DocumentSelectionLayout(
@@ -341,7 +421,7 @@ class AndroidControlsDocumentLayerState
       left: caret.left,
       top: caret.top,
       height: caret.height,
-      width: 2,
+      width: widget.caretWidth,
       child: Leader(
         link: _controlsController!.collapsedHandleFocalPoint,
         child: ListenableBuilder(
@@ -349,7 +429,7 @@ class AndroidControlsDocumentLayerState
           builder: (context, child) {
             return ColoredBox(
               key: DocumentKeys.caret,
-              color: caretColor.withOpacity(_caretBlinkController.opacity),
+              color: caretColor.withValues(alpha: _caretBlinkController.opacity),
             );
           },
         ),

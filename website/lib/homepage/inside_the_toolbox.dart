@@ -195,7 +195,7 @@ class _AttributedTextDemoState extends State<_AttributedTextDemo> {
 
   void _computeStyledText() {
     final text = AttributedText(
-      text: 'This is some text styled with AttributedText',
+      'This is some text styled with AttributedText',
     );
 
     for (final range in _boldRanges) {
@@ -361,12 +361,12 @@ class _TextRangeSelectorState extends State<TextRangeSelector> {
           rangeStart = i;
         }
       } else if (rangeStart >= 0) {
-        ranges.add(SpanRange(start: rangeStart, end: i - 1));
+        ranges.add(SpanRange(rangeStart, i - 1));
         rangeStart = -1;
       }
     }
     if (rangeStart >= 0) {
-      ranges.add(SpanRange(start: rangeStart, end: widget.cellCount - 1));
+      ranges.add(SpanRange(rangeStart, widget.cellCount - 1));
     }
 
     widget.onRangesChange?.call(ranges);
@@ -387,7 +387,7 @@ class _TextRangeSelectorState extends State<TextRangeSelector> {
             height: widget.cellHeight,
             decoration: BoxDecoration(
               border: Border.all(color: _isSelected(index) ? Colors.tealAccent : Colors.grey),
-              color: _isSelected(index) ? Colors.tealAccent.withOpacity(0.7) : Colors.grey.withOpacity(0.7),
+              color: _isSelected(index) ? Colors.tealAccent.withValues(alpha: 0.7) : Colors.grey.withValues(alpha: 0.7),
             ),
           ),
         ),

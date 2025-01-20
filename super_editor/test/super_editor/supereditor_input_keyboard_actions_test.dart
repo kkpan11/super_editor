@@ -8,6 +8,7 @@ import 'package:super_editor/super_editor.dart';
 import 'package:super_editor/super_editor_test.dart';
 
 import '../test_runners.dart';
+import '../test_tools.dart';
 import '../test_tools_user_input.dart';
 import 'supereditor_test_tools.dart';
 
@@ -315,8 +316,8 @@ void main() {
           await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
 
           // Ensure that the whole word was deleted.
-          final paragraphNode = testContext.findEditContext().document.nodes.first as ParagraphNode;
-          expect(paragraphNode.text.text.startsWith("Lorem  dolor sit amet"), isTrue);
+          final paragraphNode = testContext.findEditContext().document.first as ParagraphNode;
+          expect(paragraphNode.text.toPlainText().startsWith("Lorem  dolor sit amet"), isTrue);
           expect(
             SuperEditorInspector.findDocumentSelection(),
             const DocumentSelection.collapsed(
@@ -344,8 +345,8 @@ void main() {
           await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
 
           // Ensure that the whole word was deleted.
-          final paragraphNode = testContext.findEditContext().document.nodes.first as ParagraphNode;
-          expect(paragraphNode.text.text.startsWith("Lorem dolor sit amet"), isTrue);
+          final paragraphNode = testContext.findEditContext().document.first as ParagraphNode;
+          expect(paragraphNode.text.toPlainText().startsWith("Lorem dolor sit amet"), isTrue);
           expect(
             SuperEditorInspector.findDocumentSelection(),
             const DocumentSelection.collapsed(
@@ -373,8 +374,8 @@ void main() {
           await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
 
           // Ensure that the whole word was deleted.
-          final paragraphNode = testContext.findEditContext().document.nodes.first as ParagraphNode;
-          expect(paragraphNode.text.text, startsWith("Lorem ipsum  sit amet"));
+          final paragraphNode = testContext.findEditContext().document.first as ParagraphNode;
+          expect(paragraphNode.text.toPlainText(), startsWith("Lorem ipsum  sit amet"));
           expect(
             SuperEditorInspector.findDocumentSelection(),
             const DocumentSelection.collapsed(
@@ -402,8 +403,8 @@ void main() {
           await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
 
           // Ensure that the whole word was deleted.
-          final paragraphNode = testContext.findEditContext().document.nodes.first as ParagraphNode;
-          expect(paragraphNode.text.text.startsWith("Lorem ipsum sit amet"), isTrue);
+          final paragraphNode = testContext.findEditContext().document.first as ParagraphNode;
+          expect(paragraphNode.text.toPlainText().startsWith("Lorem ipsum sit amet"), isTrue);
           expect(
             SuperEditorInspector.findDocumentSelection(),
             const DocumentSelection.collapsed(
@@ -429,8 +430,8 @@ void main() {
           await tester.pressCtlBackspace();
 
           // Ensure that a character was deleted.
-          final paragraphNode = testContext.findEditContext().document.nodes.first as ParagraphNode;
-          expect(paragraphNode.text.text, startsWith("Lorem ipsu dolor sit amet"));
+          final paragraphNode = testContext.findEditContext().document.first as ParagraphNode;
+          expect(paragraphNode.text.toPlainText(), startsWith("Lorem ipsu dolor sit amet"));
           expect(
             SuperEditorInspector.findDocumentSelection(),
             const DocumentSelection.collapsed(
@@ -458,8 +459,8 @@ void main() {
           await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
 
           // Ensure that a character was deleted.
-          final paragraphNode = testContext.findEditContext().document.nodes.first as ParagraphNode;
-          expect(paragraphNode.text.text.startsWith("Lorem ipsumdolor sit amet"), isTrue);
+          final paragraphNode = testContext.findEditContext().document.first as ParagraphNode;
+          expect(paragraphNode.text.toPlainText().startsWith("Lorem ipsumdolor sit amet"), isTrue);
           expect(
             SuperEditorInspector.findDocumentSelection(),
             const DocumentSelection.collapsed(
@@ -470,6 +471,180 @@ void main() {
             ),
           );
         }, variant: inputSourceVariant);
+
+        testWidgetsOnMacDesktopAndWeb('with CMD + LEFT ARROW at the beginning of a paragraph', (tester) async {
+          await tester //
+              .createDocument()
+              .withLongTextContent()
+              .pump();
+
+          // Place caret at the beginning of the second paragraph.
+          await tester.placeCaretInParagraph('2', 0);
+
+          // Press the key combo to move to the beginning of the line.
+          await tester.pressCmdLeftArrow();
+
+          // Ensure that the caret didn't move, since we are already at the beginning.
+          expect(
+            SuperEditorInspector.findDocumentSelection(),
+            selectionEquivalentTo(
+              const DocumentSelection.collapsed(
+                position: DocumentPosition(
+                  nodeId: "2",
+                  nodePosition: TextNodePosition(offset: 0),
+                ),
+              ),
+            ),
+          );
+        });
+
+        testWidgetsOnMacDesktopAndWeb('with CMD + RIGHT ARROW at the end of a paragraph', (tester) async {
+          await tester //
+              .createDocument()
+              .withLongTextContent()
+              .pump();
+
+          // Place caret at the end of the first paragraph.
+          await tester.placeCaretInParagraph('1', 439);
+
+          // Press the key combo to move to the end of the line.
+          await tester.pressCmdRightArrow();
+
+          // Ensure that the caret didn't move, since we are already at the end.
+          expect(
+            SuperEditorInspector.findDocumentSelection(),
+            selectionEquivalentTo(
+              const DocumentSelection.collapsed(
+                position: DocumentPosition(
+                  nodeId: "1",
+                  nodePosition: TextNodePosition(offset: 439),
+                ),
+              ),
+            ),
+          );
+        });
+
+        testWidgetsOnMacDesktopAndWeb(
+            'SHIFT + OPTION + LEFT ARROW: deselects word at end of line after selecting the whole line from start to end',
+            (tester) async {
+          await tester //
+              .createDocument()
+              .withCustomContent(
+                MutableDocument(
+                  nodes: [
+                    ParagraphNode(
+                      id: '1',
+                      text: AttributedText('This is a paragraph'),
+                    ),
+                  ],
+                ),
+              )
+              .pump();
+
+          // Place caret at the beginning of the paragraph.
+          await tester.placeCaretInParagraph('1', 0);
+
+          // Press CMD + SHIFT + RIGHT ARROW to expand the selection to the end of the line.
+          await tester.pressShiftCmdRightArrow();
+
+          // Ensure that the whole line is selected.
+          expect(
+            SuperEditorInspector.findDocumentSelection(),
+            selectionEquivalentTo(
+              const DocumentSelection(
+                base: DocumentPosition(
+                  nodeId: "1",
+                  nodePosition: TextNodePosition(offset: 0),
+                ),
+                extent: DocumentPosition(
+                  nodeId: "1",
+                  nodePosition: TextNodePosition(offset: 19),
+                ),
+              ),
+            ),
+          );
+
+          // Press SHIFT + OPTION + LEFT ARROW to remove the last word from the selection.
+          await tester.pressShiftAltLeftArrow();
+
+          // Ensure that the last word was removed from the selection.
+          expect(
+            SuperEditorInspector.findDocumentSelection(),
+            selectionEquivalentTo(
+              const DocumentSelection(
+                base: DocumentPosition(
+                  nodeId: "1",
+                  nodePosition: TextNodePosition(offset: 0),
+                ),
+                extent: DocumentPosition(
+                  nodeId: "1",
+                  nodePosition: TextNodePosition(offset: 10),
+                ),
+              ),
+            ),
+          );
+        });
+
+        testWidgetsOnMacDesktopAndWeb(
+            'SHIFT + OPTION + RIGHT ARROW: deselects word at start of line after selecting the whole line from end to start',
+            (tester) async {
+          await tester //
+              .createDocument()
+              .withCustomContent(
+                MutableDocument(
+                  nodes: [
+                    ParagraphNode(
+                      id: '1',
+                      text: AttributedText('This is a paragraph'),
+                    ),
+                  ],
+                ),
+              )
+              .pump();
+
+          // Place caret at the end of the paragraph.
+          await tester.placeCaretInParagraph('1', 19);
+
+          // Press CMD + SHIFT + LEFT ARROW to expand the selection to the beginning of the line.
+          await tester.pressShiftCmdLeftArrow();
+
+          // Ensure that the whole line is selected.
+          expect(
+            SuperEditorInspector.findDocumentSelection(),
+            selectionEquivalentTo(
+              const DocumentSelection(
+                base: DocumentPosition(
+                  nodeId: "1",
+                  nodePosition: TextNodePosition(offset: 19),
+                ),
+                extent: DocumentPosition(
+                  nodeId: "1",
+                  nodePosition: TextNodePosition(offset: 0),
+                ),
+              ),
+            ),
+          );
+
+          // Press SHIFT + OPTION + RIGHT ARROW to remove the first word from the selection.
+          await tester.pressShiftAltRightArrow();
+
+          // Ensure that the first word was removed from the selection.
+          expect(
+            SuperEditorInspector.findDocumentSelection(),
+            selectionEquivalentTo(
+              const DocumentSelection(
+                base: DocumentPosition(
+                  nodeId: "1",
+                  nodePosition: TextNodePosition(offset: 19),
+                ),
+                extent: DocumentPosition(
+                  nodeId: "1",
+                  nodePosition: TextNodePosition(offset: 4),
+                ),
+              ),
+            ),
+          );
+        });
       });
 
       group("Windows and Linux >", () {
@@ -617,8 +792,8 @@ void main() {
           await tester.pressCtlBackspace();
 
           // Ensure that the whole word was deleted.
-          final paragraphNode = testContext.findEditContext().document.nodes.first as ParagraphNode;
-          expect(paragraphNode.text.text.startsWith("Lorem  dolor sit amet"), isTrue);
+          final paragraphNode = testContext.findEditContext().document.first as ParagraphNode;
+          expect(paragraphNode.text.toPlainText().startsWith("Lorem  dolor sit amet"), isTrue);
           expect(
             SuperEditorInspector.findDocumentSelection(),
             const DocumentSelection.collapsed(
@@ -644,8 +819,8 @@ void main() {
           await tester.pressCtlBackspace();
 
           // Ensure that the whole word was deleted.
-          final paragraphNode = testContext.findEditContext().document.nodes.first as ParagraphNode;
-          expect(paragraphNode.text.text.startsWith("Lorem dolor sit amet"), isTrue);
+          final paragraphNode = testContext.findEditContext().document.first as ParagraphNode;
+          expect(paragraphNode.text.toPlainText().startsWith("Lorem dolor sit amet"), isTrue);
           expect(
             SuperEditorInspector.findDocumentSelection(),
             const DocumentSelection.collapsed(
@@ -673,8 +848,8 @@ void main() {
           await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
 
           // Ensure that the whole word was deleted.
-          final paragraphNode = testContext.findEditContext().document.nodes.first as ParagraphNode;
-          expect(paragraphNode.text.text, startsWith("Lorem ipsum  sit amet"));
+          final paragraphNode = testContext.findEditContext().document.first as ParagraphNode;
+          expect(paragraphNode.text.toPlainText(), startsWith("Lorem ipsum  sit amet"));
           expect(
             SuperEditorInspector.findDocumentSelection(),
             const DocumentSelection.collapsed(
@@ -702,8 +877,8 @@ void main() {
           await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
 
           // Ensure that the whole word was deleted.
-          final paragraphNode = testContext.findEditContext().document.nodes.first as ParagraphNode;
-          expect(paragraphNode.text.text.startsWith("Lorem ipsum sit amet"), isTrue);
+          final paragraphNode = testContext.findEditContext().document.first as ParagraphNode;
+          expect(paragraphNode.text.toPlainText().startsWith("Lorem ipsum sit amet"), isTrue);
           expect(
             SuperEditorInspector.findDocumentSelection(),
             const DocumentSelection.collapsed(
@@ -729,8 +904,8 @@ void main() {
           await tester.pressAltBackspace();
 
           // Ensure that nothing changed.
-          final paragraphNode = testContext.findEditContext().document.nodes.first as ParagraphNode;
-          expect(paragraphNode.text.text, startsWith("Lorem ipsu dolor sit amet"));
+          final paragraphNode = testContext.findEditContext().document.first as ParagraphNode;
+          expect(paragraphNode.text.toPlainText(), startsWith("Lorem ipsu dolor sit amet"));
           expect(
             SuperEditorInspector.findDocumentSelection(),
             const DocumentSelection.collapsed(
@@ -758,8 +933,8 @@ void main() {
           await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
 
           // Ensure that nothing changed.
-          final paragraphNode = testContext.findEditContext().document.nodes.first as ParagraphNode;
-          expect(paragraphNode.text.text, startsWith("Lorem ipsumdolor sit amet"));
+          final paragraphNode = testContext.findEditContext().document.first as ParagraphNode;
+          expect(paragraphNode.text.toPlainText(), startsWith("Lorem ipsumdolor sit amet"));
           expect(
             SuperEditorInspector.findDocumentSelection(),
             const DocumentSelection.collapsed(
@@ -781,19 +956,19 @@ void main() {
               .withInputSource(inputSourceVariant.currentValue!)
               .pump();
 
-          final node = testContext.findEditContext().document.nodes.first;
+          final document = testContext.document;
 
           // Place caret at "A| header"
-          await tester.placeCaretInParagraph(node.id, 1);
+          await tester.placeCaretInParagraph(document.first.id, 1);
 
           // Delete "A".
           await tester.pressBackspace();
 
           // Ensure the first character was deleted.
-          expect((node as TextNode).text.text, ' header');
+          expect(document.first.asTextNode.text.toPlainText(), ' header');
 
           // Ensure the node is still a header.
-          expect(node.getMetadataValue("blockType"), header1Attribution);
+          expect(document.first.getMetadataValue("blockType"), header1Attribution);
         },
         variant: inputSourceVariant,
       );
@@ -807,22 +982,696 @@ void main() {
               .withInputSource(inputSourceVariant.currentValue!)
               .pump();
 
-          final node = testContext.findEditContext().document.nodes.first;
+          final document = testContext.document;
 
           // Place caret at the start of the header.
-          await tester.placeCaretInParagraph(node.id, 0);
+          await tester.placeCaretInParagraph(document.first.id, 0);
 
           // Press backspace to clear the metadata.
           await tester.pressBackspace();
 
           // Ensure the text remains the same.
-          expect((node as TextNode).text.text, 'A header');
+          expect(document.first.asTextNode.text.toPlainText(), 'A header');
 
           // Ensure the header was converted to a paragraph.
-          expect(node.getMetadataValue("blockType"), paragraphAttribution);
+          expect(document.first.getMetadataValue("blockType"), paragraphAttribution);
         },
         variant: inputSourceVariant,
       );
+
+      group("jumps to downstream node preserving approximate x-position with DOWN ARROW", () {
+        testWidgetsOnDesktop('from paragraph to paragraph', (tester) async {
+          final context = await tester //
+              .createDocument()
+              .fromMarkdown('''
+First paragraph
+
+Second paragraph''') //
+              .pump();
+
+          // Place caret at "First para|graph".
+          await tester.placeCaretInParagraph(context.document.first.id, 10);
+
+          // Press DOWN arrow to move the caret to the downstream paragraph.
+          await tester.pressDownArrow();
+
+          // Ensure the selection moved to "Second par|agraph".
+          expect(
+            SuperEditorInspector.findDocumentSelection(),
+            selectionEquivalentTo(
+              DocumentSelection.collapsed(
+                position: DocumentPosition(
+                  nodeId: context.document.last.id,
+                  nodePosition: const TextNodePosition(offset: 10),
+                ),
+              ),
+            ),
+          );
+        });
+
+        testWidgetsOnDesktop('from paragraph to task', (tester) async {
+          await _pumpEditorWithTaskComponent(
+            tester,
+            document: MutableDocument(
+              nodes: [
+                ParagraphNode(id: '1', text: AttributedText('This is a paragraph')),
+                TaskNode(id: '2', text: AttributedText('This is a task'), isComplete: false),
+              ],
+            ),
+          );
+
+          // Place the caret at "This is a |paragraph".
+          await tester.placeCaretInParagraph('1', 10);
+
+          // Press down arrow to move the caret to the downstream node.
+          //
+          // The text layout of this document is approximately:
+          //
+          // This is a paragraph
+          // [ ]This is a task
+          //
+          // So, pressing DOWN should move the caret from "This is a |paragraph"
+          // to "This is| a task".
+          await tester.pressDownArrow();
+
+          // Ensure the caret moved to "This is| a task".
+          expect(
+            SuperEditorInspector.findDocumentSelection(),
+            selectionEquivalentTo(
+              const DocumentSelection.collapsed(
+                position: DocumentPosition(
+                  nodeId: '2',
+                  nodePosition: TextNodePosition(offset: 7),
+                ),
+              ),
+            ),
+          );
+        });
+
+        testWidgetsOnDesktop('from paragraph to list item', (tester) async {
+          final context = await tester //
+              .createDocument()
+              .fromMarkdown('''
+This is a paragraph
+
+* This is a list item''') //
+              .pump();
+
+          // Place the caret at "This is a |paragraph".
+          await tester.placeCaretInParagraph(context.document.first.id, 10);
+
+          // Press DOWN arrow to move the caret to the downstream node.
+          //
+          // The text layout of this document is approximately:
+          //
+          // This is a paragraph
+          // * This is a list item
+          //
+          // So, pressing DOWN should move the caret from "This is a |paragraph"
+          // to "This is |a list item".
+          await tester.pressDownArrow();
+
+          // Ensure the selection moved to "This is |a list item".
+          expect(
+            SuperEditorInspector.findDocumentSelection(),
+            selectionEquivalentTo(
+              DocumentSelection.collapsed(
+                position: DocumentPosition(
+                  nodeId: context.document.last.id,
+                  nodePosition: const TextNodePosition(offset: 8),
+                ),
+              ),
+            ),
+          );
+        });
+
+        testWidgetsOnDesktop('from task to paragraph', (tester) async {
+          await _pumpEditorWithTaskComponent(
+            tester,
+            document: MutableDocument(
+              nodes: [
+                TaskNode(id: '1', text: AttributedText('This is a task'), isComplete: false),
+                ParagraphNode(id: '2', text: AttributedText('This is a paragraph')),
+              ],
+            ),
+          );
+
+          // Place the caret at "This| is a task".
+          await tester.placeCaretInParagraph('1', 4);
+
+          // Press down arrow to move the caret to the downstream node.
+          //
+          // The text layout of this document is approximately:
+          //
+          // [ ]This is a task
+          // This is a paragraph
+          //
+          // So, pressing DOWN should move the caret from "This| is a task"
+          // to "This is| a paragraph".
+          await tester.pressDownArrow();
+
+          // Ensure the caret moved to "This is| a paragraph."
+          expect(
+            SuperEditorInspector.findDocumentSelection(),
+            selectionEquivalentTo(
+              const DocumentSelection.collapsed(
+                position: DocumentPosition(
+                  nodeId: '2',
+                  nodePosition: TextNodePosition(offset: 7),
+                ),
+              ),
+            ),
+          );
+        });
+
+        testWidgetsOnDesktop('from task to task', (tester) async {
+          await _pumpEditorWithTaskComponent(
+            tester,
+            document: MutableDocument(
+              nodes: [
+                TaskNode(id: '1', text: AttributedText('This is another task'), isComplete: false),
+                TaskNode(id: '2', text: AttributedText('This is a task'), isComplete: false),
+              ],
+            ),
+          );
+
+          // Place the caret at "This is a|nother task".
+          await tester.placeCaretInParagraph('1', 9);
+
+          // Press down arrow to move the caret to the downstream node.
+          //
+          // The text layout of this document is approximately:
+          //
+          //   [ ]  This is another task
+          //   [ ]  This is a task
+          //
+          // So, pressing DOWN should move the caret from "This is a|nother task"
+          // to "This is a| task".
+          await tester.pressDownArrow();
+
+          // Ensure the caret moved to "This is a| task".
+          expect(
+            SuperEditorInspector.findDocumentSelection(),
+            selectionEquivalentTo(
+              const DocumentSelection.collapsed(
+                position: DocumentPosition(
+                  nodeId: '2',
+                  nodePosition: TextNodePosition(offset: 9),
+                ),
+              ),
+            ),
+          );
+        });
+
+        testWidgetsOnDesktop('from task to list item', (tester) async {
+          await _pumpEditorWithTaskComponent(
+            tester,
+            document: MutableDocument(
+              nodes: [
+                TaskNode(id: '1', text: AttributedText('This is a task'), isComplete: false),
+                ListItemNode.unordered(id: '2', text: AttributedText('This is a list item')),
+              ],
+            ),
+          );
+
+          // Place the caret at "This| is a task".
+          await tester.placeCaretInParagraph('1', 4);
+
+          // Press down arrow to move the caret to the downstream node.
+          //
+          // The text layout of this document is approximately:
+          //
+          // [ ]This is a task
+          //  * This is a list item
+          //
+          // So, pressing DOWN should move the caret from "This| is a task"
+          // to "This| is a list item".
+          await tester.pressDownArrow();
+
+          // Ensure the caret moved to "This| is a list item".
+          expect(
+            SuperEditorInspector.findDocumentSelection(),
+            selectionEquivalentTo(
+              const DocumentSelection.collapsed(
+                position: DocumentPosition(
+                  nodeId: '2',
+                  nodePosition: TextNodePosition(offset: 4),
+                ),
+              ),
+            ),
+          );
+        });
+
+        testWidgetsOnDesktop('from list item to paragraph', (tester) async {
+          final context = await tester //
+              .createDocument()
+              .fromMarkdown('''
+* This is a list item
+
+This is a paragraph''') //
+              .pump();
+
+          // Place caret at "This is |a list item".
+          await tester.placeCaretInParagraph(context.document.first.id, 8);
+
+          // Press DOWN arrow to move the caret to the downstream node.
+          //
+          // The text layout of this document is approximately:
+          //
+          // * This is a list item
+          // This is a paragraph
+          //
+          // So, pressing DOWN should move the caret from "This is |a list item"
+          // to "This is a |paragraph".
+          await tester.pressDownArrow();
+
+          // Ensure the selection moved to "This is a |paragraph".
+          expect(
+            SuperEditorInspector.findDocumentSelection(),
+            selectionEquivalentTo(
+              DocumentSelection.collapsed(
+                position: DocumentPosition(
+                  nodeId: context.document.last.id,
+                  nodePosition: const TextNodePosition(offset: 10),
+                ),
+              ),
+            ),
+          );
+        });
+
+        testWidgetsOnDesktop('from list item to task', (tester) async {
+          await _pumpEditorWithTaskComponent(
+            tester,
+            document: MutableDocument(
+              nodes: [
+                ListItemNode.unordered(id: '1', text: AttributedText('This is a list item')),
+                TaskNode(id: '2', text: AttributedText('This is a task'), isComplete: false),
+              ],
+            ),
+          );
+
+          // Place the caret at "This| is a list item".
+          await tester.placeCaretInParagraph('1', 4);
+
+          // Press down arrow to move the caret to the downstream node.
+          //
+          // The text layout of this document is approximately:
+          //
+          //  * This is a list item
+          // [ ]This is a task
+          //
+          // So, pressing DOWN should move the caret from "This| is a list item"
+          // to "This| is a task".
+          await tester.pressDownArrow();
+
+          // Ensure the caret moved to "This| is a task".
+          expect(
+            SuperEditorInspector.findDocumentSelection(),
+            selectionEquivalentTo(
+              const DocumentSelection.collapsed(
+                position: DocumentPosition(
+                  nodeId: '2',
+                  nodePosition: TextNodePosition(offset: 4),
+                ),
+              ),
+            ),
+          );
+        });
+
+        testWidgetsOnDesktop('from list item to list item', (tester) async {
+          final context = await tester //
+              .createDocument()
+              .fromMarkdown('''
+* This is another list item
+
+* This is a list item''') //
+              .pump();
+
+          // Place the caret at "This is a|nother list item".
+          await tester.placeCaretInParagraph(context.document.first.id, 9);
+
+          // Press down arrow to move the caret to the downstream node.
+          //
+          // The text layout of this document is approximately:
+          //
+          //  *  This is another list item
+          //  *  This is a list item
+          //
+          // So, pressing DOWN should move the caret from "This is a|nother list item"
+          // to "This is a| list item".
+          await tester.pressDownArrow();
+
+          // Ensure the caret moved to "This is a| task".
+          expect(
+            SuperEditorInspector.findDocumentSelection(),
+            selectionEquivalentTo(
+              DocumentSelection.collapsed(
+                position: DocumentPosition(
+                  nodeId: context.document.last.id,
+                  nodePosition: const TextNodePosition(offset: 9),
+                ),
+              ),
+            ),
+          );
+        });
+      });
+
+      group("jumps to upstream node preserving approximate x-position with UP ARROW", () {
+        testWidgetsOnDesktop('from paragraph to paragraph', (tester) async {
+          final context = await tester //
+              .createDocument()
+              .fromMarkdown(''''
+First paragraph
+
+Second paragraph''') //
+              .pump();
+
+          // Place caret at "Second p|aragraph".
+          await tester.placeCaretInParagraph(context.document.last.id, 8);
+
+          // Press UP arrow to move the caret to the upstream paragraph.
+          await tester.pressUpArrow();
+
+          // Ensure the selection moved to "First para|graph".
+          expect(
+            SuperEditorInspector.findDocumentSelection(),
+            selectionEquivalentTo(
+              DocumentSelection.collapsed(
+                position: DocumentPosition(
+                  nodeId: context.document.first.id,
+                  nodePosition: const TextNodePosition(offset: 10),
+                ),
+              ),
+            ),
+          );
+        });
+
+        testWidgetsOnDesktop('from paragraph to task', (tester) async {
+          await _pumpEditorWithTaskComponent(
+            tester,
+            document: MutableDocument(
+              nodes: [
+                TaskNode(id: '1', text: AttributedText('This is a task'), isComplete: false),
+                ParagraphNode(id: '2', text: AttributedText('This is a paragraph')),
+              ],
+            ),
+          );
+
+          // Place the caret at "This is a |paragraph".
+          await tester.placeCaretInParagraph('2', 10);
+
+          // Press up arrow to move the caret to the upstream node.
+          //
+          // The text layout of this document is approximately:
+          //
+          // [ ]This is a task
+          // This is a paragraph
+          //
+          // So, pressing UP should move the caret from "This is a |paragraph"
+          // to "Th|is is a task".
+          await tester.pressUpArrow();
+
+          // Ensure the caret moved to "This is| a task".
+          expect(
+            SuperEditorInspector.findDocumentSelection(),
+            selectionEquivalentTo(
+              const DocumentSelection.collapsed(
+                position: DocumentPosition(
+                  nodeId: '1',
+                  nodePosition: TextNodePosition(offset: 7),
+                ),
+              ),
+            ),
+          );
+        });
+
+        testWidgetsOnDesktop('from paragraph to list item', (tester) async {
+          final context = await tester //
+              .createDocument()
+              .fromMarkdown('''
+* This is a list item
+
+This is a paragraph''') //
+              .pump();
+
+          // Place the caret at "This is a |paragraph".
+          await tester.placeCaretInParagraph(context.document.last.id, 10);
+
+          // Press UP arrow to move the caret to the upstream node.
+          //
+          // The text layout of this document is approximately:
+          //
+          // * This is a list item
+          // This is a paragraph
+          //
+          // So, pressing UP should move the caret from "This is a |paragraph"
+          // to "This is |a list item".
+          await tester.pressUpArrow();
+
+          // Ensure the selection moved to "This is |a list item".
+          expect(
+            SuperEditorInspector.findDocumentSelection(),
+            selectionEquivalentTo(
+              DocumentSelection.collapsed(
+                position: DocumentPosition(
+                  nodeId: context.document.first.id,
+                  nodePosition: const TextNodePosition(offset: 8),
+                ),
+              ),
+            ),
+          );
+        });
+
+        testWidgetsOnDesktop('from task to paragraph', (tester) async {
+          await _pumpEditorWithTaskComponent(
+            tester,
+            document: MutableDocument(
+              nodes: [
+                ParagraphNode(id: '1', text: AttributedText('This is a paragraph')),
+                TaskNode(id: '2', text: AttributedText('This is a task'), isComplete: false),
+              ],
+            ),
+          );
+
+          // Place the caret at "This| is a task".
+          await tester.placeCaretInParagraph('2', 4);
+
+          // Press up arrow to move the caret to the upstream node.
+          //
+          // The text layout of this document is approximately:
+          //
+          // This is a paragraph
+          // [ ]This is a task
+          //
+          // So, pressing UP should move the caret from "This| is a task"
+          // to "This is| a paragraph".
+          await tester.pressUpArrow();
+
+          // Ensure the caret moved to "This is| a paragraph."
+          expect(
+            SuperEditorInspector.findDocumentSelection(),
+            selectionEquivalentTo(
+              const DocumentSelection.collapsed(
+                position: DocumentPosition(
+                  nodeId: '1',
+                  nodePosition: TextNodePosition(offset: 7),
+                ),
+              ),
+            ),
+          );
+        });
+
+        testWidgetsOnDesktop('from task to task', (tester) async {
+          await _pumpEditorWithTaskComponent(
+            tester,
+            document: MutableDocument(
+              nodes: [
+                TaskNode(id: '1', text: AttributedText('This is a task'), isComplete: false),
+                TaskNode(id: '2', text: AttributedText('This is another task'), isComplete: false),
+              ],
+            ),
+          );
+
+          // Place the caret at "This is a|nother task".
+          await tester.placeCaretInParagraph('2', 9);
+
+          // Press up arrow to move the caret to the upstream node.
+          //
+          // The text layout of this document is approximately:
+          //
+          //   [ ]  This is a task
+          //   [ ]  This is another task
+          //
+          // So, pressing UP should move the caret from "This is a|nother task"
+          // to "This is a| task".
+          await tester.pressUpArrow();
+
+          // Ensure the caret moved to "This is a| task".
+          expect(
+            SuperEditorInspector.findDocumentSelection(),
+            selectionEquivalentTo(
+              const DocumentSelection.collapsed(
+                position: DocumentPosition(
+                  nodeId: '1',
+                  nodePosition: TextNodePosition(offset: 9),
+                ),
+              ),
+            ),
+          );
+        });
+
+        testWidgetsOnDesktop('from task to list item', (tester) async {
+          await _pumpEditorWithTaskComponent(
+            tester,
+            document: MutableDocument(
+              nodes: [
+                ListItemNode.unordered(id: '1', text: AttributedText('This is a list item')),
+                TaskNode(id: '2', text: AttributedText('This is a task'), isComplete: false),
+              ],
+            ),
+          );
+
+          // Place the caret at "This| is a task".
+          await tester.placeCaretInParagraph('2', 4);
+
+          // Press UP arrow to move the caret to the upstream node.
+          //
+          // The text layout of this document is approximately:
+          //
+          //  * This is a list item
+          // [ ]This is a task
+          //
+          // So, pressing UP should move the caret from "This| is a task"
+          // to "This| is a list item".
+          await tester.pressUpArrow();
+
+          // Ensure the caret moved to "This| is a list item".
+          expect(
+            SuperEditorInspector.findDocumentSelection(),
+            selectionEquivalentTo(
+              const DocumentSelection.collapsed(
+                position: DocumentPosition(
+                  nodeId: '1',
+                  nodePosition: TextNodePosition(offset: 4),
+                ),
+              ),
+            ),
+          );
+        });
+
+        testWidgetsOnDesktop('from list item to paragraph', (tester) async {
+          final context = await tester //
+              .createDocument()
+              .fromMarkdown('''
+This is a paragraph
+
+* This is a list item''') //
+              .pump();
+
+          // Place caret at "This is |a list item".
+          await tester.placeCaretInParagraph(context.document.last.id, 8);
+
+          // Press UP arrow to move the caret to the upstream node.
+          //
+          // The text layout of this document is approximately:
+          //
+          // This is a paragraph
+          // * This is a list item
+          //
+          // So, pressing UP should move the caret from "This is |a list item"
+          // to "This is a |paragraph".
+          await tester.pressUpArrow();
+
+          // Ensure the selection moved to "This is a |paragraph".
+          expect(
+            SuperEditorInspector.findDocumentSelection(),
+            selectionEquivalentTo(
+              DocumentSelection.collapsed(
+                position: DocumentPosition(
+                  nodeId: context.document.first.id,
+                  nodePosition: const TextNodePosition(offset: 10),
+                ),
+              ),
+            ),
+          );
+        });
+
+        testWidgetsOnDesktop('from list item to task', (tester) async {
+          await _pumpEditorWithTaskComponent(
+            tester,
+            document: MutableDocument(
+              nodes: [
+                TaskNode(id: '1', text: AttributedText('This is a task'), isComplete: false),
+                ListItemNode.unordered(id: '2', text: AttributedText('This is a list item')),
+              ],
+            ),
+          );
+
+          // Place the caret at "This| is a list item".
+          await tester.placeCaretInParagraph('2', 4);
+
+          // Press UP arrow to move the caret to the upstream node.
+          //
+          // The text layout of this document is approximately:
+          //
+          // [ ]This is a task
+          //  * This is a list item
+          //
+          // So, pressing UP should move the caret from "This| is a list item"
+          // to "This| is a task".
+          await tester.pressUpArrow();
+
+          // Ensure the caret moved to "This| is a task".
+          expect(
+            SuperEditorInspector.findDocumentSelection(),
+            selectionEquivalentTo(
+              const DocumentSelection.collapsed(
+                position: DocumentPosition(
+                  nodeId: '1',
+                  nodePosition: TextNodePosition(offset: 4),
+                ),
+              ),
+            ),
+          );
+        });
+
+        testWidgetsOnDesktop('from list item to list item', (tester) async {
+          final context = await tester //
+              .createDocument()
+              .fromMarkdown('''
+* This is a list item
+
+* This is another list item''') //
+              .pump();
+
+          // Place the caret at "This is a|nother list item".
+          await tester.placeCaretInParagraph(context.document.last.id, 9);
+
+          // Press UP arrow to move the caret to the upstream node.
+          //
+          // The text layout of this document is approximately:
+          //
+          //  *  This is a list item
+          //  *  This is another list item
+          //
+          // So, pressing UP should move the caret from "This is a|nother list item"
+          // to "This is a| list item".
+          await tester.pressUpArrow();
+
+          // Ensure the caret moved to "This is a| task".
+          expect(
+            SuperEditorInspector.findDocumentSelection(),
+            selectionEquivalentTo(
+              DocumentSelection.collapsed(
+                position: DocumentPosition(
+                  nodeId: context.document.first.id,
+                  nodePosition: const TextNodePosition(offset: 9),
+                ),
+              ),
+            ),
+          );
+        });
+      });
     });
 
     group("Linux >", () {
@@ -1282,7 +2131,7 @@ void main() {
         await tester.pressBackspace();
 
         // Ensure the selected content was deleted.
-        expect(SuperEditorInspector.findTextInParagraph("1").text, "Text with [] selection");
+        expect(SuperEditorInspector.findTextInComponent("1").toPlainText(), "Text with [] selection");
         expect(
           SuperEditorInspector.findDocumentSelection(),
           const DocumentSelection.collapsed(
@@ -1330,7 +2179,7 @@ void main() {
         await tester.pressDelete();
 
         // Ensure the selected content was deleted.
-        expect(SuperEditorInspector.findTextInParagraph("1").text, "Text with [] selection");
+        expect(SuperEditorInspector.findTextInComponent("1").toPlainText(), "Text with [] selection");
         expect(
           SuperEditorInspector.findDocumentSelection(),
           const DocumentSelection.collapsed(
@@ -1379,7 +2228,7 @@ void main() {
         await tester.typeKeyboardText("a");
 
         // Ensure the selected content was deleted.
-        expect(SuperEditorInspector.findTextInParagraph("1").text, "Text with [a] selection");
+        expect(SuperEditorInspector.findTextInComponent("1").toPlainText(), "Text with [a] selection");
         expect(
           SuperEditorInspector.findDocumentSelection(),
           const DocumentSelection.collapsed(
@@ -1427,7 +2276,7 @@ void main() {
         await tester.pressEscape();
 
         // Ensure the selected content was deleted.
-        expect(SuperEditorInspector.findTextInParagraph("1").text, "Text with [SELECTME] selection");
+        expect(SuperEditorInspector.findTextInComponent("1").toPlainText(), "Text with [SELECTME] selection");
         expect(
           SuperEditorInspector.findDocumentSelection(),
           const DocumentSelection.collapsed(
@@ -1461,7 +2310,7 @@ void main() {
       await tester.pressEscape();
 
       // Ensure that nothing changed.
-      expect(SuperEditorInspector.findTextInParagraph("1").text, "This is some text");
+      expect(SuperEditorInspector.findTextInComponent("1").toPlainText(), "This is some text");
       expect(
         SuperEditorInspector.findDocumentSelection(),
         const DocumentSelection.collapsed(
@@ -1849,9 +2698,7 @@ Future<TestDocumentContext> _pumpPageScrollSliverTestSetup(
                 ),
                 expandedHeight: 200.0,
               ),
-              SliverToBoxAdapter(
-                child: superEditor,
-              ),
+              superEditor,
               SliverList(
                 delegate: SliverChildBuilderDelegate(
                   (BuildContext context, int index) {
@@ -1869,12 +2716,35 @@ Future<TestDocumentContext> _pumpPageScrollSliverTestSetup(
   }).pump();
 }
 
+/// Pumps a [SuperEditor] configured with the [TaskComponentBuilder].
+Future<void> _pumpEditorWithTaskComponent(
+  WidgetTester tester, {
+  required MutableDocument document,
+}) async {
+  final composer = MutableDocumentComposer();
+  final editor = createDefaultDocumentEditor(document: document, composer: composer);
+
+  await tester.pumpWidget(
+    MaterialApp(
+      home: Scaffold(
+        body: SuperEditor(
+          editor: editor,
+          componentBuilders: [
+            TaskComponentBuilder(editor),
+            ...defaultComponentBuilders,
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
 Future<void> _pressShiftAltUpArrow(WidgetTester tester) async {
   await tester.sendKeyDownEvent(LogicalKeyboardKey.shift, platform: 'macos');
   await tester.sendKeyDownEvent(LogicalKeyboardKey.alt, platform: 'macos');
   await tester.sendKeyDownEvent(LogicalKeyboardKey.arrowUp, platform: 'macos');
   await tester.sendKeyUpEvent(LogicalKeyboardKey.arrowUp, platform: 'macos');
-  await tester.sendKeyDownEvent(LogicalKeyboardKey.alt, platform: 'macos');
+  await tester.sendKeyUpEvent(LogicalKeyboardKey.alt, platform: 'macos');
   await tester.sendKeyUpEvent(LogicalKeyboardKey.shift, platform: 'macos');
   await tester.pumpAndSettle();
 }
@@ -1884,7 +2754,7 @@ Future<void> _pressShiftAltDownArrow(WidgetTester tester) async {
   await tester.sendKeyDownEvent(LogicalKeyboardKey.alt, platform: 'macos');
   await tester.sendKeyDownEvent(LogicalKeyboardKey.arrowDown, platform: 'macos');
   await tester.sendKeyUpEvent(LogicalKeyboardKey.arrowDown, platform: 'macos');
-  await tester.sendKeyDownEvent(LogicalKeyboardKey.alt, platform: 'macos');
+  await tester.sendKeyUpEvent(LogicalKeyboardKey.alt, platform: 'macos');
   await tester.sendKeyUpEvent(LogicalKeyboardKey.shift, platform: 'macos');
   await tester.pumpAndSettle();
 }

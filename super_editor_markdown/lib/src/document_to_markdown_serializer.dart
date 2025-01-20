@@ -21,7 +21,7 @@ String serializeDocumentToMarkdown(
     // specialized cases of traditional nodes, such as serializing a
     // `ParagraphNode` with a special `"blockType"`.
     ...customNodeSerializers,
-    const ImageNodeSerializer(),
+    ImageNodeSerializer(useSizeNotation: syntax == MarkdownSyntax.superEditor),
     const HorizontalRuleNodeSerializer(),
     const ListItemNodeSerializer(),
     const TaskNodeSerializer(),
@@ -31,14 +31,14 @@ String serializeDocumentToMarkdown(
 
   StringBuffer buffer = StringBuffer();
 
-  for (int i = 0; i < doc.nodes.length; ++i) {
+  for (int i = 0; i < doc.nodeCount; ++i) {
     if (i > 0) {
       // Add a new line before every node, except the first node.
       buffer.writeln("");
     }
 
     // Serialize the current node to markdown.
-    final node = doc.nodes[i];
+    final node = doc.getNodeAt(i)!;
     for (final serializer in nodeSerializers) {
       final serialization = serializer.serialize(doc, node);
       if (serialization != null) {
@@ -80,11 +80,34 @@ abstract class NodeTypedDocumentNodeMarkdownSerializer<NodeType> implements Docu
 /// [DocumentNodeMarkdownSerializer] for serializing [ImageNode]s as standard Markdown
 /// images.
 class ImageNodeSerializer extends NodeTypedDocumentNodeMarkdownSerializer<ImageNode> {
-  const ImageNodeSerializer();
+  const ImageNodeSerializer({
+    this.useSizeNotation = false,
+  });
+
+  final bool useSizeNotation;
 
   @override
   String doSerialization(Document document, ImageNode node) {
-    return '![${node.altText}](${node.imageUrl})';
+    if (!useSizeNotation || (node.expectedBitmapSize?.width == null && node.expectedBitmapSize?.height == null)) {
+      // We don't want to use size notation or the image doesn't have
+      // size information. Use the regular syntax.
+      return '![${node.altText}](${node.imageUrl})';
+    }
+
+    StringBuffer sizeNotation = StringBuffer();
+    sizeNotation.write(' =');
+
+    if (node.expectedBitmapSize?.width != null) {
+      sizeNotation.write(node.expectedBitmapSize!.width!.toInt());
+    }
+
+    sizeNotation.write('x');
+
+    if (node.expectedBitmapSize?.height != null) {
+      sizeNotation.write(node.expectedBitmapSize!.height!.toInt());
+    }
+
+    return '![${node.altText}](${node.imageUrl}${sizeNotation.toString()})';
   }
 }
 
@@ -116,7 +139,7 @@ class ListItemNodeSerializer extends NodeTypedDocumentNodeMarkdownSerializer<Lis
     buffer.write('$indent$symbol ${node.text.toMarkdown()}');
 
     final nodeIndex = document.getNodeIndexById(node.id);
-    final nodeBelow = nodeIndex < document.nodes.length - 1 ? document.nodes[nodeIndex + 1] : null;
+    final nodeBelow = nodeIndex < document.nodeCount - 1 ? document.getNodeAt(nodeIndex + 1) : null;
     if (nodeBelow != null && (nodeBelow is! ListItemNode || nodeBelow.type != node.type)) {
       // This list item is the last item in the list. Add an extra
       // blank line after it.
@@ -178,7 +201,7 @@ class ParagraphNodeSerializer extends NodeTypedDocumentNodeMarkdownSerializer<Pa
     // paragraph so that we can tell the difference between separate
     // paragraphs vs. newlines within a single paragraph.
     final nodeIndex = document.getNodeIndexById(node.id);
-    if (nodeIndex != document.nodes.length - 1) {
+    if (nodeIndex != document.nodeCount - 1) {
       buffer.writeln();
     }
 
@@ -195,7 +218,7 @@ class TaskNodeSerializer extends NodeTypedDocumentNodeMarkdownSerializer<TaskNod
 
   @override
   String doSerialization(Document document, TaskNode node) {
-    return '- [${node.isComplete ? 'x' : ' '}] ${node.text.text}';
+    return '- [${node.isComplete ? 'x' : ' '}] ${node.text.toPlainText()}';
   }
 }
 
@@ -229,10 +252,12 @@ class AttributedTextMarkdownSerializer extends AttributionVisitor {
   late int _bufferCursor;
 
   String serialize(AttributedText attributedText) {
-    _fullText = attributedText.text;
+    _fullText = attributedText.toPlainText();
     _buffer = StringBuffer();
     _bufferCursor = 0;
-    attributedText.visitAttributions(this);
+    if (attributedText.toPlainText().isNotEmpty) {
+      attributedText.visitAttributions(this);
+    }
     return _buffer.toString();
   }
 
@@ -245,7 +270,7 @@ class AttributedTextMarkdownSerializer extends AttributionVisitor {
   ) {
     // Write out the text between the end of the last markers, and these new markers.
     _writeTextToBuffer(
-      fullText.text.substring(_bufferCursor, index),
+      fullText.toPlainText().substring(_bufferCursor, index),
     );
 
     // Add start markers.
@@ -350,14 +375,14 @@ class AttributedTextMarkdownSerializer extends AttributionVisitor {
   /// Checks for the presence of a link in the attributions and returns the characters necessary to represent it
   /// at the open or closing boundary of the attribution, depending on the event.
   static String _encodeLinkMarker(Set<Attribution> attributions, AttributionVisitEvent event) {
-    final linkAttributions = attributions.where((element) => element is LinkAttribution?);
+    final linkAttributions = attributions.whereType<LinkAttribution?>();
     if (linkAttributions.isNotEmpty) {
       final linkAttribution = linkAttributions.first as LinkAttribution;
 
       if (event == AttributionVisitEvent.start) {
         return '[';
       } else {
-        return '](${linkAttribution.url.toString()})';
+        return '](${linkAttribution.plainTextUri})';
       }
     }
     return "";
@@ -431,7 +456,7 @@ class HeaderNodeSerializer extends NodeTypedDocumentNodeMarkdownSerializer<Parag
     // paragraph so that we can tell the difference between separate
     // paragraphs vs. newlines within a single paragraph.
     final nodeIndex = document.getNodeIndexById(node.id);
-    if (nodeIndex != document.nodes.length - 1) {
+    if (nodeIndex != document.nodeCount - 1) {
       buffer.writeln();
     }
 

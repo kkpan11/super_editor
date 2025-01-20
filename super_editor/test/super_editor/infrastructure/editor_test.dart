@@ -13,15 +13,13 @@ void main() {
       test('throws exception when there is no command for a given request', () {
         final editor = Editor(
           editables: {
-            Editor.documentKey: MutableDocument(
-              nodes: [ParagraphNode(id: Editor.createNodeId(), text: AttributedText())],
-            ),
+            Editor.documentKey: MutableDocument.empty(),
           },
           requestHandlers: [],
         );
 
         expectLater(() {
-          editor.execute([const InsertCharacterAtCaretRequest(character: "a")]);
+          editor.execute([InsertCharacterAtCaretRequest(character: "a")]);
         }, throwsException);
       });
 
@@ -39,7 +37,7 @@ void main() {
           changeLog = changeList;
         }));
 
-        editorPieces.editor.execute([const InsertCharacterAtCaretRequest(character: "a")]);
+        editorPieces.editor.execute([InsertCharacterAtCaretRequest(character: "a")]);
 
         expect(changeLog, isNotNull);
         expect(changeLog!.length, 2);
@@ -65,15 +63,15 @@ void main() {
         }));
 
         editorPieces.editor
-          ..execute([const InsertCharacterAtCaretRequest(character: "H")])
-          ..execute([const InsertCharacterAtCaretRequest(character: "e")])
-          ..execute([const InsertCharacterAtCaretRequest(character: "l")])
-          ..execute([const InsertCharacterAtCaretRequest(character: "l")])
-          ..execute([const InsertCharacterAtCaretRequest(character: "o")]);
+          ..execute([InsertCharacterAtCaretRequest(character: "H")])
+          ..execute([InsertCharacterAtCaretRequest(character: "e")])
+          ..execute([InsertCharacterAtCaretRequest(character: "l")])
+          ..execute([InsertCharacterAtCaretRequest(character: "l")])
+          ..execute([InsertCharacterAtCaretRequest(character: "o")]);
 
         expect(changeLogCount, 5);
         expect(changeEventCount, 10); // 2 events per character insertion
-        expect((editorPieces.document.getNodeAt(0) as ParagraphNode).text.text, "Hello");
+        expect((editorPieces.document.getNodeAt(0) as ParagraphNode).text.toPlainText(), "Hello");
       });
 
       test('executes multiple expanding commands', () {
@@ -81,9 +79,7 @@ void main() {
         // and those commands expand to additional commands, the overall command
         // order is what we expect.
         List<EditEvent>? changeList;
-        final document = MutableDocument(
-          nodes: [ParagraphNode(id: Editor.createNodeId(), text: AttributedText())],
-        );
+        final document = MutableDocument.empty();
 
         final composer = MutableDocumentComposer(
           initialSelection: const DocumentSelection.collapsed(
@@ -99,7 +95,9 @@ void main() {
             Editor.composerKey: composer,
           },
           requestHandlers: [
-            (request) => request is _ExpandingCommandRequest ? _ExpandingCommand(request) : null,
+            (editor, request) => request is _ExpandingCommandRequest //
+                ? _ExpandingCommand(request)
+                : null,
           ],
           listeners: [
             FunctionalEditListener((newChangeList) {
@@ -125,7 +123,7 @@ void main() {
         // traversal.
         final paragraph = document.getNodeAt(0) as ParagraphNode;
         expect(
-          paragraph.text.text,
+          paragraph.text.toPlainText(),
           '''(0.0)
   (1.0)
     (2.0)
@@ -148,14 +146,7 @@ void main() {
       test('runs reactions after a command', () {
         int reactionCount = 0;
 
-        final document = MutableDocument(
-          nodes: [
-            ParagraphNode(
-              id: "1",
-              text: AttributedText(),
-            )
-          ],
-        );
+        final document = MutableDocument.empty("1");
 
         final composer = MutableDocumentComposer(
           initialSelection: const DocumentSelection.collapsed(
@@ -172,9 +163,11 @@ void main() {
           },
           requestHandlers: List.from(defaultRequestHandlers),
           reactionPipeline: [
-            FunctionalEditReaction((editorContext, requestDispatcher, changeList) {
-              reactionCount += 1;
-            }),
+            FunctionalEditReaction(
+              react: (editorContext, requestDispatcher, changeList) {
+                reactionCount += 1;
+              },
+            ),
           ],
         );
 
@@ -194,9 +187,7 @@ void main() {
       });
 
       test('interrupts back-to-back commands to run a reaction', () {
-        final document = MutableDocument(
-          nodes: [ParagraphNode(id: "1", text: AttributedText())],
-        );
+        final document = MutableDocument.empty("1");
 
         final composer = MutableDocumentComposer(
           initialSelection: const DocumentSelection.collapsed(
@@ -214,7 +205,7 @@ void main() {
           },
           requestHandlers: List.from(defaultRequestHandlers),
           reactionPipeline: [
-            FunctionalEditReaction((editorContext, requestDispatcher, changeList) {
+            FunctionalEditReaction(react: (editorContext, requestDispatcher, changeList) {
               TextInsertionEvent? insertEEvent;
               for (final edit in changeList) {
                 if (edit is! DocumentEdit) {
@@ -225,7 +216,7 @@ void main() {
                   continue;
                 }
 
-                insertEEvent = change.text.text.endsWith("e") ? change : null;
+                insertEEvent = change.text.toPlainText().endsWith("e") ? change : null;
               }
 
               if (insertEEvent == null) {
@@ -280,13 +271,11 @@ void main() {
           ]);
 
         // Ensure that our reaction ran in the middle of the requests.
-        expect((document.nodes.first as TextNode).text.text, "Hello");
+        expect((document.first as TextNode).text.toPlainText(), "Hello");
       });
 
       test('reactions receive a change list with events from earlier reactions', () {
-        final document = MutableDocument(
-          nodes: [ParagraphNode(id: "1", text: AttributedText())],
-        );
+        final document = MutableDocument.empty("1");
 
         final composer = MutableDocumentComposer(
           initialSelection: const DocumentSelection.collapsed(
@@ -305,7 +294,7 @@ void main() {
           requestHandlers: List.from(defaultRequestHandlers),
           reactionPipeline: [
             // Reaction 1 causes a change
-            FunctionalEditReaction((editorContext, requestDispatcher, changeList) {
+            FunctionalEditReaction(react: (editorContext, requestDispatcher, changeList) {
               TextInsertionEvent? insertHEvent;
               for (final edit in changeList) {
                 if (edit is! DocumentEdit) {
@@ -316,7 +305,7 @@ void main() {
                   continue;
                 }
 
-                insertHEvent = change.text.text == "H" ? change : null;
+                insertHEvent = change.text.toPlainText() == "H" ? change : null;
               }
 
               if (insertHEvent == null) {
@@ -336,7 +325,7 @@ void main() {
               ]);
             }),
             // Reaction 2 verifies that it sees the change event from reaction 1.
-            FunctionalEditReaction((editorContext, requestDispatcher, changeList) {
+            FunctionalEditReaction(react: (editorContext, requestDispatcher, changeList) {
               TextInsertionEvent? insertEEvent;
               for (final edit in changeList) {
                 if (edit is! DocumentEdit) {
@@ -347,7 +336,7 @@ void main() {
                   continue;
                 }
 
-                insertEEvent = change.text.text == "e" ? change : null;
+                insertEEvent = change.text.toPlainText() == "e" ? change : null;
               }
 
               expect(insertEEvent, isNotNull, reason: "Reaction 2 didn't receive the change from reaction 1");
@@ -370,9 +359,7 @@ void main() {
       });
 
       test('reactions do not run in response to reactions', () {
-        final document = MutableDocument(
-          nodes: [ParagraphNode(id: "1", text: AttributedText())],
-        );
+        final document = MutableDocument.empty("1");
 
         final composer = MutableDocumentComposer(
           initialSelection: const DocumentSelection.collapsed(
@@ -392,7 +379,7 @@ void main() {
           },
           requestHandlers: List.from(defaultRequestHandlers),
           reactionPipeline: [
-            FunctionalEditReaction((editorContext, requestDispatcher, changeList) {
+            FunctionalEditReaction(react: (editorContext, requestDispatcher, changeList) {
               reactionRunCount += 1;
 
               // We expect this reaction to run after we execute a command, but we don't
@@ -472,7 +459,7 @@ void main() {
           ]);
 
         // Ensure the character was inserted, and the caret moved forward.
-        expect((editorPieces.document.getNodeAt(0) as TextNode).text.text, "H");
+        expect((editorPieces.document.getNodeAt(0) as TextNode).text.toPlainText(), "H");
         expect(editorPieces.composer.selection, isNotNull);
         expect(
           editorPieces.composer.selection,
@@ -512,7 +499,7 @@ void main() {
         ]);
 
         // Verify content changes.
-        expect(document.nodes.length, 2);
+        expect(document.nodeCount, 2);
         expect(document.getNodeAt(0)!.id, "1");
         expect(document.getNodeAt(1)!.id, "2");
 
@@ -624,7 +611,7 @@ void main() {
         final editorPieces = _createStandardEditor(
           initialDocument: longTextDoc(),
           additionalReactions: [
-            FunctionalEditReaction((editorContext, requestDispatcher, changeList) {
+            FunctionalEditReaction(react: (editorContext, requestDispatcher, changeList) {
               expect(changeList.length, 1);
 
               final event = changeList.first as DocumentEdit;
@@ -707,10 +694,13 @@ class _ExpandingCommandRequest implements EditRequest {
   final int levelsOfGeneration;
 }
 
-class _ExpandingCommand implements EditCommand {
+class _ExpandingCommand extends EditCommand {
   const _ExpandingCommand(this.request);
 
   final _ExpandingCommandRequest request;
+
+  @override
+  HistoryBehavior get historyBehavior => HistoryBehavior.undoable;
 
   @override
   void execute(EditContext context, CommandExecutor executor) {
@@ -721,7 +711,7 @@ class _ExpandingCommand implements EditCommand {
       InsertTextCommand(
         documentPosition: DocumentPosition(
           nodeId: paragraph.id,
-          nodePosition: TextNodePosition(offset: paragraph.text.text.length),
+          nodePosition: TextNodePosition(offset: paragraph.text.length),
         ),
         textToInsert:
             "${request.generationId > 0 ? "\n" : ""}${List.filled(request.generationId, "  ").join()}(${request.generationId}.${request.batchId})",

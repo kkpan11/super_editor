@@ -26,12 +26,7 @@ class _UserTagsFeatureDemoState extends State<UserTagsFeatureDemo> {
   void initState() {
     super.initState();
 
-    _document = MutableDocument(nodes: [
-      ParagraphNode(
-        id: Editor.createNodeId(),
-        text: AttributedText(""),
-      ),
-    ]);
+    _document = MutableDocument.empty();
     _composer = MutableDocumentComposer();
     _editor = Editor(
       editables: {
@@ -69,18 +64,18 @@ class _UserTagsFeatureDemoState extends State<UserTagsFeatureDemo> {
     setState(() {
       _users.clear();
 
-      for (final node in _document.nodes) {
+      for (final node in _document) {
         if (node is! TextNode) {
           continue;
         }
 
         final userSpans = node.text.getAttributionSpansInRange(
           attributionFilter: (a) => a is CommittedStableTagAttribution,
-          range: SpanRange(0, node.text.text.length - 1),
+          range: SpanRange(0, node.text.length - 1),
         );
 
         for (final userSpan in userSpans) {
-          _users.add(node.text.text.substring(userSpan.start, userSpan.end + 1));
+          _users.add(node.text.substring(userSpan.start, userSpan.end + 1));
         }
       }
     });
@@ -112,53 +107,50 @@ class _UserTagsFeatureDemoState extends State<UserTagsFeatureDemo> {
   }
 
   Widget _buildEditor() {
-    return IntrinsicHeight(
-      child: SuperEditor(
-        editor: _editor,
-        document: _document,
-        composer: _composer,
-        focusNode: _editorFocusNode,
-        stylesheet: defaultStylesheet.copyWith(
-          inlineTextStyler: (attributions, existingStyle) {
-            TextStyle style = defaultInlineTextStyler(attributions, existingStyle);
+    return SuperEditor(
+      editor: _editor,
+      focusNode: _editorFocusNode,
+      shrinkWrap: true,
+      stylesheet: defaultStylesheet.copyWith(
+        inlineTextStyler: (attributions, existingStyle) {
+          TextStyle style = defaultInlineTextStyler(attributions, existingStyle);
 
-            if (attributions.contains(stableTagComposingAttribution)) {
-              style = style.copyWith(
-                color: Colors.blue,
-              );
-            }
+        if (attributions.contains(stableTagComposingAttribution)) {
+          style = style.copyWith(
+            color: Colors.blue,
+          );
+        }
 
-            if (attributions.whereType<CommittedStableTagAttribution>().isNotEmpty) {
-              style = style.copyWith(
-                color: Colors.orange,
-              );
-            }
+        if (attributions.whereType<CommittedStableTagAttribution>().isNotEmpty) {
+          style = style.copyWith(
+            color: Colors.orange,
+          );
+        }
 
-            return style;
-          },
-          addRulesAfter: [
-            ...darkModeStyles,
-          ],
-        ),
-        documentOverlayBuilders: [
-          AttributedTextBoundsOverlay(
-            selector: (a) => a == stableTagComposingAttribution,
-            builder: (context, attribution) {
-              return Leader(
-                link: _composingLink,
-                child: const SizedBox(),
-              );
-            },
-          ),
-          DefaultCaretOverlayBuilder(
-            caretStyle: CaretStyle().copyWith(color: Colors.redAccent),
-          ),
-        ],
-        plugins: {
-          _userTagPlugin,
+        return style;
+      },
+      addRulesAfter: [
+        ...darkModeStyles,
+      ],
+    ),
+    documentOverlayBuilders: [
+      AttributedTextBoundsOverlay(
+        selector: (a) => a == stableTagComposingAttribution,
+        builder: (context, attribution) {
+          return Leader(
+            link: _composingLink,
+            child: const SizedBox(),
+          );
         },
       ),
-    );
+      DefaultCaretOverlayBuilder(
+        caretStyle: CaretStyle().copyWith(color: Colors.redAccent),
+      ),
+    ],
+    plugins: {
+      _userTagPlugin,
+    },
+        );
   }
 
   Widget _buildTagList() {

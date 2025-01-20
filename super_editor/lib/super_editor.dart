@@ -16,6 +16,7 @@ export 'src/core/styles.dart';
 
 // Super Editor
 export 'src/default_editor/attributions.dart';
+export 'src/default_editor/blocks/indentation.dart';
 export 'src/default_editor/blockquote.dart';
 export 'src/default_editor/box_component.dart';
 export 'src/default_editor/common_editor_operations.dart';
@@ -39,6 +40,7 @@ export 'src/default_editor/layout_single_column/layout_single_column.dart';
 export 'src/default_editor/list_items.dart';
 export 'src/default_editor/multi_node_editing.dart';
 export 'src/default_editor/paragraph.dart';
+export 'src/default_editor/layout_single_column/selection_aware_viewmodel.dart';
 export 'src/default_editor/selection_binary.dart';
 export 'src/default_editor/selection_upstream_downstream.dart';
 export 'src/default_editor/super_editor.dart';
@@ -49,6 +51,7 @@ export 'src/default_editor/text_tokenizing/action_tags.dart';
 export 'src/default_editor/text_tokenizing/pattern_tags.dart';
 export 'src/default_editor/text_tokenizing/tags.dart';
 export 'src/default_editor/text_tokenizing/stable_tags.dart';
+export 'src/default_editor/spelling_and_grammar/spelling_and_grammar_styler.dart';
 export 'src/default_editor/unknown_component.dart';
 
 // Document operations used by SuperEditor and/or SuperReader,
@@ -64,7 +67,6 @@ export 'src/infrastructure/content_layers.dart';
 export 'src/infrastructure/documents/document_layers.dart';
 export 'src/infrastructure/documents/document_scroller.dart';
 export 'src/infrastructure/documents/selection_leader_document_layer.dart';
-export 'src/infrastructure/focus.dart';
 export 'src/infrastructure/ime_input_owner.dart';
 export 'src/infrastructure/keyboard.dart';
 export 'src/infrastructure/multi_tap_gesture.dart';
@@ -74,9 +76,11 @@ export 'src/infrastructure/flutter/text_selection.dart';
 export 'src/infrastructure/platforms/android/android_document_controls.dart';
 export 'src/infrastructure/platforms/android/toolbar.dart';
 export 'src/infrastructure/platforms/ios/ios_document_controls.dart';
+export 'src/infrastructure/platforms/ios/ios_system_context_menu.dart';
 export 'src/infrastructure/platforms/ios/floating_cursor.dart';
 export 'src/infrastructure/platforms/ios/toolbar.dart';
 export 'src/infrastructure/platforms/ios/magnifier.dart';
+export 'src/infrastructure/platforms/ios/selection_heuristics.dart';
 export 'src/infrastructure/platforms/mac/mac_ime.dart';
 export 'src/infrastructure/platforms/mobile_documents.dart';
 export 'src/infrastructure/scrolling_diagnostics/scrolling_diagnostics.dart';
@@ -85,11 +89,12 @@ export 'src/infrastructure/strings.dart';
 export 'src/super_textfield/super_textfield.dart';
 export 'src/infrastructure/touch_controls.dart';
 export 'src/infrastructure/text_input.dart';
-export 'src/infrastructure/viewport_size_reporting.dart';
 export 'src/infrastructure/popovers.dart';
-export 'src/infrastructure/popover_scaffold.dart';
 export 'src/infrastructure/selectable_list.dart';
-export 'src/infrastructure/default_popovers.dart';
+export 'src/infrastructure/actions.dart';
+export 'src/infrastructure/keyboard_panel_scaffold.dart';
+
+export 'src/default_editor/tap_handlers/tap_handlers.dart';
 
 // Super Reader
 export 'src/super_reader/read_only_document_android_touch_interactor.dart';
@@ -98,3 +103,15 @@ export 'src/super_reader/read_only_document_keyboard_interactor.dart';
 export 'src/super_reader/read_only_document_mouse_interactor.dart';
 export 'src/super_reader/reader_context.dart';
 export 'src/super_reader/super_reader.dart';
+
+// Export from super_text_layout so that downstream clients don't
+// have to add this package to get access to these classes.
+export 'package:super_text_layout/super_text_layout.dart'
+    show
+        UnderlineStyle,
+        SquiggleUnderlineStyle,
+        SquiggleUnderlinePainter,
+        DottedUnderlineStyle,
+        DottedUnderlinePainter,
+        StraightUnderlineStyle,
+        StraightUnderlinePainter;

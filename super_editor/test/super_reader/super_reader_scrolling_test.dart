@@ -21,7 +21,7 @@ void main() {
           .pump();
 
       final document = SuperReaderInspector.findDocument()!;
-      final firstParagraph = document.nodes.first as ParagraphNode;
+      final firstParagraph = document.first as ParagraphNode;
 
       final dragGesture = await tester.startDocumentDragFromPosition(
         from: DocumentPosition(
@@ -56,10 +56,11 @@ void main() {
           .pump();
 
       final document = SuperReaderInspector.findDocument()!;
-      final lastParagraph = document.nodes.last as ParagraphNode;
+      final lastParagraph = document.last as ParagraphNode;
 
       // Jump to the end of the document
       scrollController.jumpTo(scrollController.position.maxScrollExtent);
+      await tester.pump();
 
       final dragGesture = await tester.startDocumentDragFromPosition(
         from: DocumentPosition(
@@ -95,8 +96,8 @@ void main() {
           .pump();
 
       final document = SuperReaderInspector.findDocument()!;
-      final firstParagraph = document.nodes.first as ParagraphNode;
-      final lastParagraph = document.nodes.last as ParagraphNode;
+      final firstParagraph = document.first as ParagraphNode;
+      final lastParagraph = document.last as ParagraphNode;
 
       final dragGesture = await tester.startDocumentDragFromPosition(
         from: DocumentPosition(
@@ -140,8 +141,8 @@ void main() {
           .pump();
 
       final document = SuperReaderInspector.findDocument()!;
-      final firstParagraph = document.nodes.first as ParagraphNode;
-      final lastParagraph = document.nodes.last as ParagraphNode;
+      final firstParagraph = document.first as ParagraphNode;
+      final lastParagraph = document.last as ParagraphNode;
 
       // Place the caret at the end of the document, which causes the editor to
       // scroll to the bottom.
@@ -175,7 +176,7 @@ void main() {
         DocumentSelection(
           base: DocumentPosition(
             nodeId: lastParagraph.id,
-            nodePosition: lastParagraph.endPosition.copyWith(affinity: TextAffinity.upstream),
+            nodePosition: lastParagraph.endPosition,
           ),
           extent: DocumentPosition(
             nodeId: firstParagraph.id,
@@ -195,7 +196,7 @@ void main() {
           .forDesktop() //
           .pump();
       final document = SuperReaderInspector.findDocument()!;
-      final lastParagraph = document.nodes.last as ParagraphNode;
+      final lastParagraph = document.last as ParagraphNode;
 
       // Place the caret at the end of the document, which should cause the
       // editor to scroll to the bottom.
@@ -282,7 +283,7 @@ void main() {
 
       await tester //
           .createDocument()
-          .withSingleParagraph()
+          .withLongTextContent()
           .withScrollController(scrollController)
           .pump();
 
@@ -314,7 +315,7 @@ void main() {
 
       await tester //
           .createDocument()
-          .withSingleParagraph()
+          .withLongTextContent()
           .withScrollController(scrollController)
           .pump();
 
@@ -341,6 +342,37 @@ void main() {
 
       // Ensure the we scrolled back to the end.
       expect(scrollController.offset, scrollController.position.maxScrollExtent);
+    });
+
+    testWidgetsOnArbitraryDesktop("does not stop momentum on mouse move", (tester) async {
+      final scrollController = ScrollController();
+
+      // Pump a reader with a small size to make it scrollable.
+      await tester //
+          .createDocument() //
+          .withCustomContent(longTextDoc()) //
+          .withScrollController(scrollController) //
+          .withEditorSize(const Size(300, 300))
+          .pump();
+
+      // Fling scroll with the trackpad to generate momentum.
+      await tester.trackpadFling(
+        find.byType(SuperReader),
+        const Offset(0.0, -300),
+        300.0,
+      );
+
+      final scrollOffsetInMiddleOfMomentum = scrollController.offset;
+
+      // Move the mouse around.
+      final gesture = await tester.createGesture();
+      await gesture.moveTo(tester.getTopLeft(find.byType(SuperReader)));
+
+      // Let any momentum run.
+      await tester.pumpAndSettle();
+
+      // Ensure that the momentum didn't stop due to mouse movement.
+      expect(scrollOffsetInMiddleOfMomentum, lessThan(scrollController.offset));
     });
 
     group("when all content fits in the viewport", () {
@@ -535,7 +567,7 @@ void main() {
 
         // Drag an arbitrary amount of pixels from the top of the reader.
         final dragGesture = await tester.dragByFrameCount(
-          startLocation: tester.getRect(find.byType(SuperReader)).topCenter + const Offset(0, 5),
+          startLocation: tester.getRect(find.byType(Viewport)).topCenter + const Offset(0, 5),
           totalDragOffset: const Offset(0, 400.0),
         );
 

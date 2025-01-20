@@ -10,6 +10,25 @@ import '../../test_documents.dart';
 void main() {
   group("SuperEditor stable tags >", () {
     group("composing >", () {
+      testWidgetsOnAllPlatforms("starts with a trigger", (tester) async {
+        await _pumpTestEditor(
+          tester,
+          singleParagraphEmptyDoc(),
+        );
+        await tester.placeCaretInParagraph("1", 0);
+
+        // Compose a stable tag.
+        await tester.typeImeText("@");
+
+        // Ensure that the tag has a composing attribution.
+        final text = SuperEditorInspector.findTextInComponent("1");
+        expect(text.toPlainText(), "@");
+        expect(
+          text.getAttributedRange({stableTagComposingAttribution}, 0),
+          const SpanRange(0, 0),
+        );
+      });
+
       testWidgetsOnAllPlatforms("can start at the beginning of a paragraph", (tester) async {
         await _pumpTestEditor(
           tester,
@@ -21,8 +40,8 @@ void main() {
         await tester.typeImeText("@john");
 
         // Ensure that the tag has a composing attribution.
-        final text = SuperEditorInspector.findTextInParagraph("1");
-        expect(text.text, "@john");
+        final text = SuperEditorInspector.findTextInComponent("1");
+        expect(text.toPlainText(), "@john");
         expect(
           text.getAttributedRange({stableTagComposingAttribution}, 0),
           const SpanRange(0, 4),
@@ -49,7 +68,35 @@ void main() {
         await tester.typeImeText("@john");
 
         // Ensure that the tag has a composing attribution.
-        final text = SuperEditorInspector.findTextInParagraph("1");
+        final text = SuperEditorInspector.findTextInComponent("1");
+        expect(text.toPlainText(), "before @john after");
+        expect(
+          text.getAttributedRange({stableTagComposingAttribution}, 7),
+          const SpanRange(7, 11),
+        );
+      });
+
+      testWidgetsOnAllPlatforms("can start at the beginning of an existing word", (tester) async {
+        await _pumpTestEditor(
+          tester,
+          MutableDocument(
+            nodes: [
+              ParagraphNode(
+                id: "1",
+                text: AttributedText("before john after"),
+              ),
+            ],
+          ),
+        );
+
+        // Place the caret at "before |john"
+        await tester.placeCaretInParagraph("1", 7);
+
+        // Type the trigger to start composing a tag.
+        await tester.typeImeText("@");
+
+        // Ensure that "@john" was attributed.
+        final text = SuperEditorInspector.findTextInComponent("1");
         expect(text.text, "before @john after");
         expect(
           text.getAttributedRange({stableTagComposingAttribution}, 7),
@@ -78,8 +125,8 @@ void main() {
 
         // Ensure that there's no more composing attribution because the tag
         // should have been committed.
-        final text = SuperEditorInspector.findTextInParagraph("1");
-        expect(text.text, "before @john after");
+        final text = SuperEditorInspector.findTextInComponent("1");
+        expect(text.toPlainText(), "before @john after");
         expect(
           text.getAttributionSpansInRange(
             attributionFilter: (attribution) => attribution == stableTagComposingAttribution,
@@ -91,17 +138,16 @@ void main() {
 
       testWidgetsOnAllPlatforms("can be configured to continue after a space", (tester) async {
         await _pumpTestEditor(
-          tester,
-          MutableDocument(
-            nodes: [
-              ParagraphNode(
-                id: "1",
-                text: AttributedText("before "),
-              ),
-            ],
-          ),
-          const TagRule(trigger: "@"),
-        );
+            tester,
+            MutableDocument(
+              nodes: [
+                ParagraphNode(
+                  id: "1",
+                  text: AttributedText("before "),
+                ),
+              ],
+            ),
+            const TagRule(trigger: "@"));
 
         // Place the caret at "before |"
         await tester.placeCaretInParagraph("1", 7);
@@ -110,8 +156,8 @@ void main() {
         await tester.typeImeText("@john");
 
         // Ensure that we started composing a tag before adding a space.
-        var text = SuperEditorInspector.findTextInParagraph("1");
-        expect(text.text, "before @john");
+        var text = SuperEditorInspector.findTextInComponent("1");
+        expect(text.toPlainText(), "before @john");
         expect(
           text.getAttributedRange({stableTagComposingAttribution}, 7),
           const SpanRange(7, 11),
@@ -120,11 +166,17 @@ void main() {
         await tester.typeImeText(" after");
 
         // Ensure that the composing attribution continues after the space.
-        text = SuperEditorInspector.findTextInParagraph("1");
-        expect(text.text, "before @john after");
+        text = SuperEditorInspector.findTextInComponent("1");
+        expect(text.toPlainText(), "before @john after");
         expect(
-          text.getAttributedRange({stableTagComposingAttribution}, 7),
-          const SpanRange(7, 17),
+          text.getAttributionSpansByFilter((a) => a == stableTagComposingAttribution),
+          {
+            const AttributionSpan(
+              attribution: stableTagComposingAttribution,
+              start: 7,
+              end: 17,
+            ),
+          },
         );
       });
 
@@ -168,7 +220,7 @@ void main() {
         );
 
         // Ensure we're still composing
-        AttributedText text = SuperEditorInspector.findTextInParagraph("1");
+        AttributedText text = SuperEditorInspector.findTextInComponent("1");
         expect(
           text.getAttributedRange({stableTagComposingAttribution}, 7),
           const SpanRange(7, 11),
@@ -181,7 +233,7 @@ void main() {
         await tester.pressShiftLeftArrow();
 
         // Ensure we're still composing
-        text = SuperEditorInspector.findTextInParagraph("1");
+        text = SuperEditorInspector.findTextInComponent("1");
         expect(
           text.getAttributedRange({stableTagComposingAttribution}, 7),
           const SpanRange(7, 11),
@@ -192,7 +244,7 @@ void main() {
         await tester.pressShiftLeftArrow();
 
         // Ensure we're still composing
-        text = SuperEditorInspector.findTextInParagraph("1");
+        text = SuperEditorInspector.findTextInComponent("1");
         expect(
           text.getAttributedRange({stableTagComposingAttribution}, 7),
           const SpanRange(7, 11),
@@ -250,7 +302,7 @@ void main() {
         );
 
         // Ensure we're still composing
-        AttributedText text = SuperEditorInspector.findTextInParagraph("1");
+        AttributedText text = SuperEditorInspector.findTextInComponent("1");
         expect(
           text.getAttributedRange({stableTagComposingAttribution}, 7),
           const SpanRange(7, 11),
@@ -277,7 +329,7 @@ void main() {
         await tester.typeImeText("@");
 
         // Ensure that we're composing.
-        var text = SuperEditorInspector.findTextInParagraph("1");
+        var text = SuperEditorInspector.findTextInComponent("1");
         expect(
           text.getAttributedRange({stableTagComposingAttribution}, 7),
           const SpanRange(7, 7),
@@ -287,7 +339,7 @@ void main() {
         await tester.pressEscape();
 
         // Ensure that the composing was cancelled.
-        text = SuperEditorInspector.findTextInParagraph("1");
+        text = SuperEditorInspector.findTextInComponent("1");
         expect(
           text.getAttributionSpansInRange(
             attributionFilter: (attribution) => attribution == stableTagComposingAttribution,
@@ -304,8 +356,8 @@ void main() {
         await tester.typeImeText("j");
 
         // Ensure that we didn't start composing again.
-        text = SuperEditorInspector.findTextInParagraph("1");
-        expect(text.text, "before @j");
+        text = SuperEditorInspector.findTextInComponent("1");
+        expect(text.toPlainText(), "before @j");
         expect(
           text.getAttributionSpansInRange(
             attributionFilter: (attribution) => attribution == stableTagComposingAttribution,
@@ -322,8 +374,8 @@ void main() {
         await tester.typeImeText(" ");
 
         // Ensure that the cancelled tag wasn't committed, and didn't start composing again.
-        text = SuperEditorInspector.findTextInParagraph("1");
-        expect(text.text, "before @j ");
+        text = SuperEditorInspector.findTextInComponent("1");
+        expect(text.toPlainText(), "before @j ");
         expect(
           text.getAttributionSpansInRange(
             attributionFilter: (attribution) => attribution == stableTagComposingAttribution,
@@ -407,11 +459,42 @@ void main() {
         await tester.typeImeText("@john after");
 
         // Ensure that only the stable tag is attributed as a stable tag.
-        final text = SuperEditorInspector.findTextInParagraph("1");
-        expect(text.text, "@john after");
+        final text = SuperEditorInspector.findTextInComponent("1");
+        expect(text.toPlainText(), "@john after");
         expect(
           text.getAttributedRange({const CommittedStableTagAttribution("john")}, 0),
           const SpanRange(0, 4),
+        );
+      });
+
+      testWidgetsOnAllPlatforms("at the beginning of an existing word", (tester) async {
+        await _pumpTestEditor(
+          tester,
+          MutableDocument(
+            nodes: [
+              ParagraphNode(
+                id: "1",
+                text: AttributedText("before john after"),
+              ),
+            ],
+          ),
+        );
+
+        // Place the caret at "before |john"
+        await tester.placeCaretInParagraph("1", 7);
+
+        // Type the trigger to start composing a tag.
+        await tester.typeImeText("@");
+
+        // Press left arrow to move away and commit the tag.
+        await tester.pressLeftArrow();
+
+        // Ensure that "@john" was attributed.
+        final text = SuperEditorInspector.findTextInComponent("1");
+        expect(text.text, "before @john after");
+        expect(
+          text.getAttributedRange({const CommittedStableTagAttribution("john")}, 7),
+          const SpanRange(7, 11),
         );
       });
 
@@ -435,8 +518,8 @@ void main() {
         await tester.typeImeText("@john after");
 
         // Ensure that only the stable tag is attributed as a stable tag.
-        final text = SuperEditorInspector.findTextInParagraph("1");
-        expect(text.text, "before @john after");
+        final text = SuperEditorInspector.findTextInComponent("1");
+        expect(text.toPlainText(), "before @john after");
         expect(
           text.getAttributedRange({const CommittedStableTagAttribution("john")}, 7),
           const SpanRange(7, 11),
@@ -477,8 +560,8 @@ void main() {
         );
 
         // Ensure that the tag was submitted.
-        final text = SuperEditorInspector.findTextInParagraph("1");
-        expect(text.text, "before @john");
+        final text = SuperEditorInspector.findTextInComponent("1");
+        expect(text.toPlainText(), "before @john");
         expect(
           text.getAttributedRange({const CommittedStableTagAttribution("john")}, 7),
           const SpanRange(7, 11),
@@ -521,8 +604,8 @@ void main() {
         await tester.pressLeftArrow();
 
         // Ensure that the stable tag was submitted.
-        final text = SuperEditorInspector.findTextInParagraph("1");
-        expect(text.text, "before @john");
+        final text = SuperEditorInspector.findTextInComponent("1");
+        expect(text.toPlainText(), "before @john");
         expect(
           text.getAttributedRange({const CommittedStableTagAttribution("john")}, 7),
           const SpanRange(7, 11),
@@ -570,8 +653,8 @@ void main() {
         await tester.pressRightArrow();
 
         // Ensure that the stable tag was submitted.
-        final text = SuperEditorInspector.findTextInParagraph("1");
-        expect(text.text, "before @john after");
+        final text = SuperEditorInspector.findTextInComponent("1");
+        expect(text.toPlainText(), "before @john after");
         expect(
           text.getAttributedRange({const CommittedStableTagAttribution("john")}, 7),
           const SpanRange(7, 11),
@@ -856,7 +939,7 @@ void main() {
         await tester.pressBackspace();
 
         // Ensure that the entire user tag was deleted.
-        expect(SuperEditorInspector.findTextInParagraph("1").text, "before  after");
+        expect(SuperEditorInspector.findTextInComponent("1").toPlainText(), "before  after");
         expect(
           SuperEditorInspector.findDocumentSelection(),
           const DocumentSelection.collapsed(
@@ -894,7 +977,7 @@ void main() {
         await tester.pressDelete();
 
         // Ensure that the entire user tag was deleted.
-        expect(SuperEditorInspector.findTextInParagraph("1").text, "before  after");
+        expect(SuperEditorInspector.findTextInComponent("1").toPlainText(), "before  after");
         expect(
           SuperEditorInspector.findDocumentSelection(),
           const DocumentSelection.collapsed(
@@ -909,14 +992,7 @@ void main() {
       testWidgetsOnAllPlatforms("deletes second tag and leaves first tag alone", (tester) async {
         await _pumpTestEditor(
           tester,
-          MutableDocument(
-            nodes: [
-              ParagraphNode(
-                id: "1",
-                text: AttributedText(),
-              ),
-            ],
-          ),
+          MutableDocument.empty("1"),
         );
 
         await tester.placeCaretInParagraph("1", 0);
@@ -931,7 +1007,7 @@ void main() {
         await tester.pressBackspace();
 
         // Ensure the 2nd tag was deleted, and the 1st tag remains.
-        expect(SuperEditorInspector.findTextInParagraph("1").text, "one @john two  three");
+        expect(SuperEditorInspector.findTextInComponent("1").toPlainText(), "one @john two  three");
         expect(
           SuperEditorInspector.findDocumentSelection(),
           const DocumentSelection.collapsed(
@@ -981,7 +1057,7 @@ void main() {
         await tester.pressBackspace();
 
         // Ensure that both user tags were completely deleted.
-        expect(SuperEditorInspector.findTextInParagraph("1").text, "one  three");
+        expect(SuperEditorInspector.findTextInComponent("1").toPlainText(), "one  three");
         expect(
           SuperEditorInspector.findDocumentSelection(),
           const DocumentSelection.collapsed(
@@ -1037,7 +1113,7 @@ void main() {
         await tester.pressBackspace();
 
         // Ensure that both user tags were completely deleted.
-        expect(SuperEditorInspector.findTextInParagraph("1").text, "one  four");
+        expect(SuperEditorInspector.findTextInComponent("1").toPlainText(), "one  four");
         expect(
           SuperEditorInspector.findDocumentSelection(),
           const DocumentSelection.collapsed(
@@ -1046,6 +1122,194 @@ void main() {
               nodePosition: TextNodePosition(offset: 4),
             ),
           ),
+        );
+      });
+    });
+
+    group("emoji >", () {
+      testWidgetsOnAllPlatforms("can be typed as first character of a paragraph without crashing the editor",
+          (tester) async {
+        // Ensure we can type an emoji as first character without crashing
+        // https://github.com/superlistapp/super_editor/issues/1863
+        await _pumpTestEditor(
+          tester,
+          singleParagraphEmptyDoc(),
+        );
+
+        // Place the caret at the beginning of the paragraph.
+        await tester.placeCaretInParagraph("1", 0);
+
+        // Type an emoji as first character 💙
+        await tester.typeImeText("💙");
+
+        expect(
+          SuperEditorInspector.findDocumentSelection(),
+          const DocumentSelection.collapsed(
+            position: DocumentPosition(
+              nodeId: "1",
+              nodePosition: TextNodePosition(offset: 2),
+            ),
+          ),
+        );
+
+        final text = SuperEditorInspector.findTextInComponent("1");
+        expect(text.toPlainText(), "💙");
+      });
+
+      testWidgetsOnAllPlatforms("caret can move around emoji without breaking editor", (tester) async {
+        // We are doing this to ensure the plugin doesn't make the editor crash when moving caret around emoji.
+        await _pumpTestEditor(
+          tester,
+          MutableDocument(
+            nodes: [
+              ParagraphNode(
+                id: "1",
+                text: AttributedText("💙"),
+              ),
+            ],
+          ),
+        );
+
+        // Place the caret before the emoji: |💙
+        await tester.placeCaretInParagraph("1", 0);
+
+        // Place the caret after the emoji: 💙|
+        await tester.pressRightArrow();
+
+        expect(
+          SuperEditorInspector.findDocumentSelection(),
+          const DocumentSelection.collapsed(
+            position: DocumentPosition(
+              nodeId: "1",
+              nodePosition: TextNodePosition(offset: 2),
+            ),
+          ),
+        );
+
+        // Move the caret back to initial position, before the emoji: |💙.
+        await tester.pressLeftArrow();
+
+        expect(
+          SuperEditorInspector.findDocumentSelection(),
+          const DocumentSelection.collapsed(
+            position: DocumentPosition(
+              nodeId: "1",
+              nodePosition: TextNodePosition(offset: 0),
+            ),
+          ),
+        );
+
+        // Ensure the paragraph string is well formed: 💙
+        final text = SuperEditorInspector.findTextInComponent("1");
+        expect(text.toPlainText(), "💙");
+      });
+
+      testWidgetsOnAllPlatforms("can be captured with trigger", (tester) async {
+        await _pumpTestEditor(
+          tester,
+          singleParagraphEmptyDoc(),
+        );
+
+        // Place the caret at the beginning of the paragraph.
+        await tester.placeCaretInParagraph("1", 0);
+
+        // Type @ to trigger a composing tag, followed by an emoji 💙
+        await tester.typeImeText("@💙");
+
+        // Ensure the emoji is in the tag, and nothing went wrong with string formation.
+        final text = SuperEditorInspector.findTextInComponent("1");
+        expect(text.toPlainText(), "@💙");
+
+        // Ensure the composing tag includes the emoji.
+        expect(
+          SuperEditorInspector.findTextInComponent("1")
+              .getAttributionSpansByFilter((a) => a == stableTagComposingAttribution),
+          {
+            const AttributionSpan(
+              attribution: stableTagComposingAttribution,
+              start: 0,
+              end: 2,
+            ),
+          },
+        );
+
+        // Commit the tag.
+        await tester.typeImeText(" ");
+
+        // Ensure the committed tag is the emoji and the composing tag is removed
+        expect(
+          SuperEditorInspector.findTextInComponent("1")
+              .getAttributionSpansByFilter((a) => a is CommittedStableTagAttribution),
+          {
+            const AttributionSpan(
+              attribution: CommittedStableTagAttribution("💙"),
+              start: 0,
+              end: 2,
+            ),
+          },
+        );
+      });
+
+      testWidgetsOnAllPlatforms("can be used before a trigger", (tester) async {
+        await _pumpTestEditor(
+          tester,
+          MutableDocument(
+            nodes: [
+              ParagraphNode(
+                id: "1",
+                text: AttributedText("💙"),
+              ),
+            ],
+          ),
+        );
+
+        // Place the caret after the emoji: 💙|
+        await tester.placeCaretInParagraph("1", 2);
+
+        // Type @ to trigger a composing tag: 💙@
+        await tester.typeImeText("@");
+
+        // Ensure nothing went wrong with the string construction.
+        final text = SuperEditorInspector.findTextInComponent("1");
+        expect(text.toPlainText(), "💙@");
+
+        // Ensure the tag was committed with the emoji.
+        expect(
+          SuperEditorInspector.findTextInComponent("1")
+              .getAttributionSpansByFilter((a) => a == stableTagComposingAttribution),
+          {
+            const AttributionSpan(
+              attribution: stableTagComposingAttribution,
+              start: 2,
+              end: 2,
+            ),
+          },
+        );
+      });
+
+      testWidgetsOnAllPlatforms("can be used in the middle of a tag", (tester) async {
+        await _pumpTestEditor(
+          tester,
+          singleParagraphEmptyDoc(),
+        );
+
+        // Place the caret at the beginning of the paragraph.
+        await tester.placeCaretInParagraph("1", 0);
+
+        // Start composing a tag with an emoji in the middle
+        await tester.typeImeText("@Flutter💙SuperEditor ");
+
+        // Ensure the tag was committed with the emoji.
+        expect(
+          SuperEditorInspector.findTextInComponent("1")
+              .getAttributionSpansByFilter((a) => a is CommittedStableTagAttribution),
+          {
+            const AttributionSpan(
+              attribution: CommittedStableTagAttribution("Flutter💙SuperEditor"),
+              start: 0,
+              end: 20,
+            ),
+          },
         );
       });
     });

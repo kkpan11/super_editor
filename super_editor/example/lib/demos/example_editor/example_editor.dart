@@ -2,6 +2,7 @@ import 'package:example/logging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:super_editor/super_editor.dart';
+import 'package:super_editor_markdown/super_editor_markdown.dart';
 
 import '_example_document.dart';
 import '_toolbar.dart';
@@ -55,7 +56,7 @@ class _ExampleEditorState extends State<ExampleEditor> {
     _doc = createInitialDocument()..addListener(_onDocumentChange);
     _composer = MutableDocumentComposer();
     _composer.selectionNotifier.addListener(_hideOrShowToolbar);
-    _docEditor = createDefaultDocumentEditor(document: _doc, composer: _composer);
+    _docEditor = createDefaultDocumentEditor(document: _doc, composer: _composer, isHistoryEnabled: true);
     _docOps = CommonEditorOperations(
       editor: _docEditor,
       document: _doc,
@@ -148,13 +149,10 @@ class _ExampleEditorState extends State<ExampleEditor> {
     // text.
     // TODO: switch this to use a Leader and Follower
     WidgetsBinding.instance.addPostFrameCallback((timeStamp) {
-      final docBoundingBox = (_docLayoutKey.currentState as DocumentLayout)
-          .getRectForSelection(_composer.selection!.base, _composer.selection!.extent)!;
-      final docBox = _docLayoutKey.currentContext!.findRenderObject() as RenderBox;
-      final overlayBoundingBox = Rect.fromPoints(
-        docBox.localToGlobal(docBoundingBox.topLeft),
-        docBox.localToGlobal(docBoundingBox.bottomRight),
-      );
+      final layout = _docLayoutKey.currentState as DocumentLayout;
+      final docBoundingBox = layout.getRectForSelection(_composer.selection!.base, _composer.selection!.extent)!;
+      final globalOffset = layout.getGlobalOffsetFromDocumentOffset(Offset.zero);
+      final overlayBoundingBox = docBoundingBox.shift(globalOffset);
 
       _textSelectionAnchor.value = overlayBoundingBox.topCenter;
     });
@@ -172,7 +170,16 @@ class _ExampleEditorState extends State<ExampleEditor> {
     // I tried explicitly unfocus()'ing the URL textfield
     // in the toolbar but it didn't return focus to the
     // editor. I'm not sure why.
-    _editorFocusNode.requestFocus();
+    //
+    // Only do that if the primary focus is not at the root focus scope because
+    // this might signify that the app is going to the background. Removing
+    // the focus from the root focus scope in that situation prevents the editor
+    // from re-gaining focus when the app is brought back to the foreground.
+    //
+    // See https://github.com/superlistapp/super_editor/issues/2279 for details.
+    if (FocusManager.instance.primaryFocus != FocusManager.instance.rootScope) {
+      _editorFocusNode.requestFocus();
+    }
   }
 
   DocumentGestureMode get _gestureMode {
@@ -254,7 +261,16 @@ class _ExampleEditorState extends State<ExampleEditor> {
     _imageFormatBarOverlayController.hide();
 
     // Ensure that focus returns to the editor.
-    _editorFocusNode.requestFocus();
+    //
+    // Only do that if the primary focus is not at the root focus scope because
+    // this might signify that the app is going to the background. Removing
+    // the focus from the root focus scope in that situation prevents the editor
+    // from re-gaining focus when the app is brought back to the foreground.
+    //
+    // See https://github.com/superlistapp/super_editor/issues/2279 for details.
+    if (FocusManager.instance.primaryFocus != FocusManager.instance.rootScope) {
+      _editorFocusNode.requestFocus();
+    }
   }
 
   @override
@@ -376,8 +392,6 @@ class _ExampleEditorState extends State<ExampleEditor> {
             controller: _iosControlsController,
             child: SuperEditor(
               editor: _docEditor,
-              document: _doc,
-              composer: _composer,
               focusNode: _editorFocusNode,
               scrollController: _scrollController,
               documentLayoutKey: _docLayoutKey,
@@ -398,7 +412,7 @@ class _ExampleEditorState extends State<ExampleEditor> {
               selectionStyle: isLight
                   ? defaultSelectionStyle
                   : SelectionStyles(
-                      selectionColor: Colors.red.withOpacity(0.3),
+                      selectionColor: Colors.red.withValues(alpha: 0.3),
                     ),
               stylesheet: defaultStylesheet.copyWith(
                 addRulesAfter: [
@@ -415,6 +429,9 @@ class _ExampleEditorState extends State<ExampleEditor> {
               keyboardActions: _inputSource == TextInputSource.ime ? defaultImeKeyboardActions : defaultKeyboardActions,
               androidToolbarBuilder: (_) => _buildAndroidFloatingToolbar(),
               overlayController: _overlayController,
+              plugins: {
+                MarkdownInlineUpstreamSyntaxPlugin(),
+              },
             ),
           ),
         ),
@@ -482,14 +499,16 @@ class _ExampleEditorState extends State<ExampleEditor> {
         print("Applying width $width to node $nodeId");
         final node = _doc.getNodeById(nodeId)!;
         final currentStyles = SingleColumnLayoutComponentStyles.fromMetadata(node);
-        SingleColumnLayoutComponentStyles(
-          width: width,
-          padding: currentStyles.padding,
-        ).applyTo(node);
 
-        // TODO: schedule a presentation reflow so that the image changes size immediately (https://github.com/superlistapp/super_editor/issues/1529)
-        //       Right now, nothing happens when pressing the button, unless we force a
-        //       rebuild/reflow.
+        _docEditor.execute([
+          ChangeSingleColumnLayoutComponentStylesRequest(
+            nodeId: nodeId,
+            styles: SingleColumnLayoutComponentStyles(
+              width: width,
+              padding: currentStyles.padding,
+            ),
+          )
+        ]);
       },
       closeToolbar: _hideImageToolbar,
     );

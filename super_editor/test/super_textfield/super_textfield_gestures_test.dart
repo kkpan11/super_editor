@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -157,6 +158,38 @@ void main() {
           SuperTextFieldInspector.findSelection(),
           const TextSelection.collapsed(offset: 0),
         );
+      });
+
+      testWidgetsOnAllPlatforms("when a single-line text field contains scrollable text", (tester) async {
+        // The purpose of this test is to ensure that when placing the caret in a scrollable
+        // single-line text field (a text field with more text than can fit), the text field
+        // doesn't erratically move the caret somewhere else due to buggy scroll calculations.
+        await _pumpSingleLineTextField(
+          tester,
+          controller: AttributedTextEditingController(
+            // Display enough text to ensure the text field is scrollable.
+            text: AttributedText(
+              "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Phasellus sed sagittis urna.",
+            ),
+          ),
+        );
+
+        // Ensure we begin with no scroll offset.
+        expect(SuperTextFieldInspector.isScrolledToBeginning(), isTrue);
+
+        // Place the caret at an arbitrary offset other than zero (so that we can
+        // catch any bug where the caret ends up being placed too far upstream after
+        // the tap).
+        await tester.placeCaretInSuperTextField(10);
+
+        // Ensure the caret was placed at the desired text position.
+        expect(
+          SuperTextFieldInspector.findSelection(),
+          const TextSelection.collapsed(offset: 10),
+        );
+
+        // Ensure that placing the caret didn't cause the scroll view to jump anywhere.
+        expect(SuperTextFieldInspector.isScrolledToBeginning(), isTrue);
       });
     });
 
@@ -589,7 +622,11 @@ a scrollbar
         // of the HorizontalDragGestureRecognizer, thereby moving the caret.
         final gesture = await tester.startGesture(tester.getTopLeft(find.byType(SuperTextField)));
         addTearDown(() => gesture.removePointer());
+        // This first move is just enough to surpass the touch slop, which then
+        // triggers _onPanStart, but doesn't impact the text selection.
         await gesture.moveBy(const Offset(19, 0));
+        // This second move runs _onPanUpdate, which does change the text selection.
+        await gesture.moveBy(const Offset(1, 0));
         await gesture.up();
         await tester.pumpAndSettle();
 
@@ -706,6 +743,59 @@ a scrollbar
         // Ensure we are connected again.
         expect(controller.isAttachedToIme, true);
       });
+
+      testWidgetsOnMobile("tap up does not shows the toolbar if the field does not have focus", (tester) async {
+        await _pumpTestAppWithFakeToolbar(tester);
+
+        // Tap down and up so the field is focused.
+        await tester.tapAt(tester.getTopLeft(find.byKey(_textFieldKey)));
+        await tester.pumpAndSettle();
+
+        // Ensure the toolbar isn't visible.
+        expect(find.byKey(_popoverToolbarKey), findsNothing);
+      });
+
+      testWidgetsOnIos("tap up shows the toolbar if the field already has focus", (tester) async {
+        await _pumpTestAppWithFakeToolbar(tester);
+
+        // Tap down and up so the field is focused.
+        await tester.tapAt(tester.getTopLeft(find.byKey(_textFieldKey)));
+        await tester.pumpAndSettle();
+
+        // Ensure the toolbar isn't visible.
+        expect(find.byKey(_popoverToolbarKey), findsNothing);
+
+        // Avoid a double tap.
+        await tester.pump(kDoubleTapTimeout + const Duration(milliseconds: 1));
+
+        // Tap down and up again.
+        await tester.tapAt(tester.getTopLeft(find.byKey(_textFieldKey)));
+        await tester.pumpAndSettle();
+
+        // Ensure the toolbar is visible.
+        expect(find.byKey(_popoverToolbarKey), findsOneWidget);
+      });
+
+      testWidgetsOnAndroid("tap up does not shows the toolbar if the field already has focus", (tester) async {
+        await _pumpTestAppWithFakeToolbar(tester);
+
+        // Tap down and up so the field is focused.
+        await tester.tapAt(tester.getTopLeft(find.byKey(_textFieldKey)));
+        await tester.pumpAndSettle();
+
+        // Ensure the toolbar isn't visible.
+        expect(find.byKey(_popoverToolbarKey), findsNothing);
+
+        // Avoid a double tap.
+        await tester.pump(kDoubleTapTimeout + const Duration(milliseconds: 1));
+
+        // Tap down and up again.
+        await tester.tapAt(tester.getTopLeft(find.byKey(_textFieldKey)));
+        await tester.pumpAndSettle();
+
+        // Ensure the toolbar is visible.
+        expect(find.byKey(_popoverToolbarKey), findsNothing);
+      });
     });
 
     testWidgetsOnAllPlatforms("loses focus when user taps outside in a TapRegion", (tester) async {
@@ -788,6 +878,77 @@ Future<void> _pumpTestApp(
   );
 }
 
+Future<void> _pumpSingleLineTextField(
+  WidgetTester tester, {
+  AttributedTextEditingController? controller,
+  double? width,
+}) async {
+  await tester.pumpWidget(
+    MaterialApp(
+      home: Scaffold(
+        body: Center(
+          child: SizedBox(
+            width: width ?? 400,
+            child: DecoratedBox(
+              decoration: BoxDecoration(border: Border.all(color: Colors.red)),
+              child: SuperTextField(
+                textController: controller,
+                // We use significant padding to catch bugs related to projecting offsets
+                // between the text layout and the scrolling viewport.
+                padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 48),
+                minLines: 1,
+                maxLines: 1,
+                inputSource: TextInputSource.ime,
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+/// Pump a test app with either a [SuperAndroidTextField] or a [SuperIOSTextField] with a fake toolbar.
+///
+/// The textfield is bound to [_textFieldKey] and the toolbar is bound to [_popoverToolbarKey].
+///
+/// This is used because we cannot configure the toolbar with [SuperTextField]'s public API.
+Future<void> _pumpTestAppWithFakeToolbar(
+  WidgetTester tester, {
+  ImeAttributedTextEditingController? controller,
+}) async {
+  await tester.pumpWidget(
+    MaterialApp(
+      home: Scaffold(
+        body: Center(
+          child: SizedBox(
+            width: 400,
+            child: DecoratedBox(
+              decoration: BoxDecoration(border: Border.all(color: Colors.red)),
+              child: defaultTargetPlatform == TargetPlatform.android
+                  ? SuperAndroidTextField(
+                      key: _textFieldKey,
+                      caretStyle: const CaretStyle(),
+                      textController: controller,
+                      selectionColor: Colors.blue,
+                      handlesColor: Colors.blue,
+                      popoverToolbarBuilder: (context, controller, config) => SizedBox(key: _popoverToolbarKey),
+                    )
+                  : SuperIOSTextField(
+                      key: _textFieldKey,
+                      caretStyle: const CaretStyle(),
+                      selectionColor: Colors.blue,
+                      handlesColor: Colors.blue,
+                      popoverToolbarBuilder: (context, controller) => SizedBox(key: _popoverToolbarKey),
+                    ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
 // Custom gesture settings that ensure panSlop equal to touchSlop
 class _GestureSettings extends DeviceGestureSettings {
   const _GestureSettings({
@@ -799,9 +960,5 @@ class _GestureSettings extends DeviceGestureSettings {
   final double panSlop;
 }
 
-TextStyle _textStyleBuilder(Set<Attribution> attributions) {
-  return defaultTextFieldStyleBuilder(attributions).copyWith(
-    color: Colors.black,
-    fontFamily: 'Roboto',
-  );
-}
+final _popoverToolbarKey = GlobalKey();
+final _textFieldKey = GlobalKey();

@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -15,12 +16,28 @@ void testGoldensOnAllPlatforms(
   String description,
   WidgetTesterCallback test, {
   bool skip = false,
+  Size? windowSize,
 }) {
-  testGoldensOnAndroid(description, test, skip: skip);
-  testGoldensOniOS(description, test, skip: skip);
-  testGoldensOnMac(description, test, skip: skip);
-  testGoldensOnWindows(description, test, skip: skip);
-  testGoldensOnLinux(description, test, skip: skip);
+  testGoldensOnAndroid(description, test, windowSize: windowSize, skip: skip);
+  testGoldensOniOS(description, test, windowSize: windowSize, skip: skip);
+  testGoldensOnMac(description, test, windowSize: windowSize, skip: skip);
+  testGoldensOnWindows(description, test, windowSize: windowSize, skip: skip);
+  testGoldensOnLinux(description, test, windowSize: windowSize, skip: skip);
+}
+
+/// Runs one golden test for Android and iOS.
+///
+/// It's the job of the test implementation to include the platform name in the golden
+/// file name - if this is not done, all tests will overwrite the same golden file(s).
+@isTest
+void testGoldensOnMobile(
+  String description,
+  WidgetTesterCallback test, {
+  bool skip = false,
+  Size? windowSize,
+}) {
+  testGoldensOnAndroid(description, test, windowSize: windowSize, skip: skip);
+  testGoldensOniOS(description, test, windowSize: windowSize, skip: skip);
 }
 
 /// A golden test that configures itself as a Android platform before executing the
@@ -30,9 +47,14 @@ void testGoldensOnAndroid(
   String description,
   WidgetTesterCallback test, {
   bool skip = false,
+  Size? windowSize,
 }) {
   testGoldens('$description (on Android)', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
+
+    // Adjust the size of the golden window/image as desired.
+    tester.viewSize = windowSize;
+
     try {
       await test(tester);
     } finally {
@@ -48,9 +70,14 @@ void testGoldensOniOS(
   String description,
   WidgetTesterCallback test, {
   bool skip = false,
+  Size? windowSize,
 }) {
   testGoldens('$description (on iOS)', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+
+    // Adjust the size of the golden window/image as desired.
+    tester.viewSize = windowSize;
+
     try {
       await test(tester);
     } finally {
@@ -66,9 +93,14 @@ void testGoldensOnMac(
   String description,
   WidgetTesterCallback test, {
   bool skip = false,
+  Size? windowSize,
 }) {
   testGoldens(description, (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+
+    // Adjust the size of the golden window/image as desired.
+    tester.viewSize = windowSize;
+
     try {
       await test(tester);
     } finally {
@@ -84,9 +116,14 @@ void testGoldensOnWindows(
   String description,
   WidgetTesterCallback test, {
   bool skip = false,
+  Size? windowSize,
 }) {
   testGoldens(description, (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+
+    // Adjust the size of the golden window/image as desired.
+    tester.viewSize = windowSize;
+
     try {
       await test(tester);
     } finally {
@@ -102,9 +139,14 @@ void testGoldensOnLinux(
   String description,
   WidgetTesterCallback test, {
   bool skip = false,
+  Size? windowSize,
 }) {
   testGoldens(description, (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+
+    // Adjust the size of the golden window/image as desired.
+    tester.viewSize = windowSize;
+
     try {
       await test(tester);
     } finally {
@@ -112,6 +154,23 @@ void testGoldensOnLinux(
     }
   }, skip: skip);
 }
+
+extension TesterWindowSize on WidgetTester {
+  set viewSize(Size? desiredSize) {
+    if (desiredSize == null) {
+      return;
+    }
+
+    view.physicalSize = desiredSize;
+    addTearDown(() => view.resetPhysicalSize());
+  }
+}
+
+const goldenSizeXLarge = Size(2400, 1600);
+const goldenSizeLarge = Size(1200, 800);
+const goldenSizeLongStrip = Size(1000, 300);
+const goldenSizeMedium = Size(800, 600);
+const goldenSizeSmall = Size(600, 400);
 
 /// A matcher that expects given content to match the golden file referenced
 /// by [key], allowing up to [maxPixelMismatchCount] different pixels before

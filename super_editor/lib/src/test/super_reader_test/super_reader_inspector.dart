@@ -53,16 +53,6 @@ class SuperReaderInspector {
     return alignment.withinRect(rect);
   }
 
-  /// Returns the (x,y) offset for a caret, if that caret appeared at the given [position].
-  ///
-  /// {@macro super_document_finder}
-  static Offset calculateOffsetForCaret(DocumentPosition position, [Finder? finder]) {
-    final documentLayout = _findDocumentLayout(finder);
-    final positionRect = documentLayout.getRectForPosition(position);
-    assert(positionRect != null);
-    return positionRect!.topLeft;
-  }
-
   /// Returns `true` if the entire content rectangle at [position] is visible on
   /// screen, or `false` otherwise.
   ///
@@ -105,7 +95,17 @@ class SuperReaderInspector {
   /// {@macro super_document_finder}
   static AttributedText findTextInParagraph(String nodeId, [Finder? superDocumentFinder]) {
     final documentLayout = _findDocumentLayout(superDocumentFinder);
-    return (documentLayout.getComponentByNodeId(nodeId) as TextComponentState).widget.text;
+    final component = documentLayout.getComponentByNodeId(nodeId);
+
+    if (component is TextComponentState) {
+      return component.widget.text;
+    }
+
+    if (component is ProxyDocumentComponent) {
+      return (component.childDocumentComponentKey.currentState as TextComponentState).widget.text;
+    }
+
+    throw Exception('The component for node id $nodeId is not a TextComponent.');
   }
 
   /// Finds the paragraph with the given [nodeId] and returns the paragraph's content as a [TextSpan].
@@ -117,7 +117,7 @@ class SuperReaderInspector {
   static TextSpan findRichTextInParagraph(String nodeId, [Finder? superReaderFinder]) {
     final documentLayout = _findDocumentLayout(superReaderFinder);
 
-    final textComponentState = documentLayout.getComponentByNodeId(nodeId) as TextComponentState;
+    final textComponentState = documentLayout.getComponentByNodeId(nodeId)!;
     final superText = find
         .descendant(of: find.byWidget(textComponentState.widget), matching: find.byType(SuperText))
         .evaluate()
@@ -133,7 +133,7 @@ class SuperReaderInspector {
   static TextStyle? findParagraphStyle(String nodeId, [Finder? superDocumentFinder]) {
     final documentLayout = _findDocumentLayout(superDocumentFinder);
 
-    final textComponentState = documentLayout.getComponentByNodeId(nodeId) as TextComponentState;
+    final textComponentState = documentLayout.getComponentByNodeId(nodeId)!;
     final superText = find
         .descendant(of: find.byWidget(textComponentState.widget), matching: find.byType(SuperText))
         .evaluate()
@@ -155,11 +155,11 @@ class SuperReaderInspector {
       throw Exception('SuperReader not found');
     }
 
-    if (index >= doc.nodes.length) {
-      throw Exception('Tried to access index $index in a document where the max index is ${doc.nodes.length - 1}');
+    if (index >= doc.nodeCount) {
+      throw Exception('Tried to access index $index in a document where the max index is ${doc.nodeCount - 1}');
     }
 
-    final node = doc.nodes[index];
+    final node = doc.getNodeAt(index);
     if (node is! NodeType) {
       throw Exception('Tried to access a ${node.runtimeType} as $NodeType');
     }

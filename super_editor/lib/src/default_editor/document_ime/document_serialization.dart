@@ -92,14 +92,14 @@ class DocumentImeSerializer {
 
       // Cache mappings between the IME text range and the document position
       // so that we can easily convert between the two, when requested.
-      final imeRange = TextRange(start: characterCount, end: characterCount + node.text.text.length);
-      editorImeLog.finer("IME range $imeRange -> text node content '${node.text.text}'");
+      final imeRange = TextRange(start: characterCount, end: characterCount + node.text.length);
+      editorImeLog.finer("IME range $imeRange -> text node content '${node.text.toPlainText()}'");
       imeRangesToDocTextNodes[imeRange] = node.id;
       docTextNodesToImeRanges[node.id] = imeRange;
 
       // Concatenate this node's text with the previous nodes.
-      buffer.write(node.text.text);
-      characterCount += node.text.text.length;
+      buffer.write(node.text.toPlainText());
+      characterCount += node.text.length;
     }
 
     imeText = buffer.toString();
@@ -226,6 +226,42 @@ class DocumentImeSerializer {
     );
   }
 
+  /// Returns `true` if the [imePosition] is inside the prepended placeholder,
+  /// or `false` otherwise.
+  ///
+  /// The placeholder is a sequence of characters that are sent to the IME, but are
+  /// invisible to the user.
+  bool isPositionInsidePlaceholder(TextPosition imePosition) {
+    if (!didPrependPlaceholder) {
+      return false;
+    }
+
+    if (imePosition.offset <= -1) {
+      // The given imePosition might be a selection or a composing region.
+      // The IME composing position always has a value. When the IME wants
+      // to describe the absence of a composing region, the offset is set to -1.
+      // Therefore, this position refers to the absence of a composing region, so
+      // this position isn't sitting in the placeholder.
+      return false;
+    }
+
+    if (imePosition.offset >= _prependedPlaceholder.length) {
+      return false;
+    }
+
+    return true;
+  }
+
+  /// Returns the first visible position in the IME content.
+  ///
+  /// If a placeholder is prepended, returns the first position after the placeholder,
+  /// otherwise, returns the first position.
+  TextPosition get firstVisiblePosition {
+    return didPrependPlaceholder //
+        ? TextPosition(offset: _prependedPlaceholder.length)
+        : const TextPosition(offset: 0);
+  }
+
   DocumentPosition _imeToDocumentPosition(TextPosition imePosition, {required bool isUpstream}) {
     for (final range in imeRangesToDocTextNodes.keys) {
       if (range.start <= imePosition.offset && imePosition.offset <= range.end) {
@@ -267,7 +303,7 @@ class DocumentImeSerializer {
     editorImeLog.shout("IME Ranges to text nodes:");
     for (final entry in imeRangesToDocTextNodes.entries) {
       editorImeLog.shout(" - IME range: ${entry.key} -> Text node: ${entry.value}");
-      editorImeLog.shout("    ^ node content: '${(_doc.getNodeById(entry.value) as TextNode).text.text}'");
+      editorImeLog.shout("    ^ node content: '${(_doc.getNodeById(entry.value) as TextNode).text.toPlainText()}'");
     }
     editorImeLog.shout("-----------------------------------------------------------");
     throw Exception(
@@ -351,128 +387,6 @@ class DocumentImeSerializer {
       selection: imeSelection,
       composing: imeComposingRegion,
     );
-  }
-
-  /// Narrows the given [selection] until the base and extent both point to
-  /// `TextNode`s.
-  ///
-  /// If the given [selection] base and/or extent already point to a `TextNode`
-  /// then those same end-caps are retained in the returned `DocumentSelection`.
-  ///
-  /// If there is no text content within the [selection], `null` is returned.
-  DocumentSelection? _constrictToTextSelectionEndCaps(DocumentSelection selection) {
-    final baseNode = _doc.getNodeById(selection.base.nodeId)!;
-    final baseNodeIndex = _doc.getNodeIndexById(baseNode.id);
-    final extentNode = _doc.getNodeById(selection.extent.nodeId)!;
-    final extentNodeIndex = _doc.getNodeIndexById(extentNode.id);
-
-    final startNode = baseNodeIndex <= extentNodeIndex ? baseNode : extentNode;
-    final startNodeIndex = _doc.getNodeIndexById(startNode.id);
-    final startPosition =
-        baseNodeIndex <= extentNodeIndex ? selection.base.nodePosition : selection.extent.nodePosition;
-    final endNode = baseNodeIndex <= extentNodeIndex ? extentNode : baseNode;
-    final endNodeIndex = _doc.getNodeIndexById(endNode.id);
-    final endPosition = baseNodeIndex <= extentNodeIndex ? selection.extent.nodePosition : selection.base.nodePosition;
-
-    if (startNodeIndex == endNodeIndex) {
-      // The document selection is all in one node.
-      if (startNode is! TextNode) {
-        // The only content selected is non-text. Return null.
-        return null;
-      }
-
-      // Part of a single TextNode is selected, therefore, the given selection
-      // is already restricted to text end caps.
-      return selection;
-    }
-
-    DocumentNode? restrictedStartNode;
-    TextNodePosition? restrictedStartPosition;
-    if (startNode is TextNode) {
-      restrictedStartNode = startNode;
-      restrictedStartPosition = startPosition as TextNodePosition;
-    } else {
-      int restrictedStartNodeIndex = startNodeIndex + 1;
-      while (_doc.getNodeAt(restrictedStartNodeIndex) is! TextNode && restrictedStartNodeIndex <= endNodeIndex) {
-        restrictedStartNodeIndex += 1;
-      }
-
-      if (_doc.getNodeAt(restrictedStartNodeIndex) is TextNode) {
-        restrictedStartNode = _doc.getNodeAt(restrictedStartNodeIndex);
-        restrictedStartPosition = const TextNodePosition(offset: 0);
-      }
-    }
-
-    DocumentNode? restrictedEndNode;
-    TextNodePosition? restrictedEndPosition;
-    if (endNode is TextNode) {
-      restrictedEndNode = endNode;
-      restrictedEndPosition = endPosition as TextNodePosition;
-    } else {
-      int restrictedEndNodeIndex = endNodeIndex - 1;
-      while (_doc.getNodeAt(restrictedEndNodeIndex) is! TextNode && restrictedEndNodeIndex >= startNodeIndex) {
-        restrictedEndNodeIndex -= 1;
-      }
-
-      if (_doc.getNodeAt(restrictedEndNodeIndex) is TextNode) {
-        restrictedEndNode = _doc.getNodeAt(restrictedEndNodeIndex);
-        restrictedEndPosition = TextNodePosition(offset: (restrictedEndNode as TextNode).text.text.length);
-      }
-    }
-
-    // If there was no text between the selection end-caps, return null.
-    if (restrictedStartPosition == null || restrictedEndPosition == null) {
-      return null;
-    }
-
-    return DocumentSelection(
-      base: DocumentPosition(
-        nodeId: restrictedStartNode!.id,
-        nodePosition: restrictedStartPosition,
-      ),
-      extent: DocumentPosition(
-        nodeId: restrictedEndNode!.id,
-        nodePosition: restrictedEndPosition,
-      ),
-    );
-  }
-
-  /// Serializes just enough document text to serve the needs of the IME.
-  ///
-  /// The serialized text includes all the content of all partially selected
-  /// nodes, plus one node on either side to allow for upstream and downstream
-  /// deletions. For example, the user press backspace at the beginning of a
-  /// paragraph. We need to tell the IME that there's content before the paragraph
-  /// so that the IME sends us the delete delta.
-  String _getMinimumTextForIME(DocumentSelection selection) {
-    final baseNode = _doc.getNodeById(selection.base.nodeId)!;
-    final baseNodeIndex = _doc.getNodeIndexById(baseNode.id);
-    final extentNode = _doc.getNodeById(selection.extent.nodeId)!;
-    final extentNodeIndex = _doc.getNodeIndexById(extentNode.id);
-
-    final selectionStartNode = baseNodeIndex <= extentNodeIndex ? baseNode : extentNode;
-    final selectionStartNodeIndex = _doc.getNodeIndexById(selectionStartNode.id);
-    final startNodeIndex = max(selectionStartNodeIndex - 1, 0);
-
-    final selectionEndNode = baseNodeIndex <= extentNodeIndex ? extentNode : baseNode;
-    final selectionEndNodeIndex = _doc.getNodeIndexById(selectionEndNode.id);
-    final endNodeIndex = min(selectionEndNodeIndex + 1, _doc.nodes.length - 1);
-
-    final buffer = StringBuffer();
-    for (int i = startNodeIndex; i <= endNodeIndex; i += 1) {
-      final node = _doc.getNodeAt(i);
-      if (node is! TextNode) {
-        continue;
-      }
-
-      if (buffer.length > 0) {
-        buffer.write('\n');
-      }
-
-      buffer.write(node.text.text);
-    }
-
-    return buffer.toString();
   }
 }
 

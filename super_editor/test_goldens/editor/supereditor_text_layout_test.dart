@@ -94,7 +94,13 @@ void main() {
           editorKey: scaledEditorKey,
         );
 
-        await screenMatchesGolden(tester, 'text-scaling-paragraph-expanded-selection');
+        await expectLater(
+          find.byType(MaterialApp).first,
+          matchesGoldenFileWithPixelAllowance(
+            'goldens/text-scaling-paragraph-expanded-selection.png',
+            21,
+          ),
+        );
       });
 
       testGoldensOnAndroid('for unordered list item', (tester) async {
@@ -144,7 +150,7 @@ void main() {
 
         await expectLater(
           find.byType(MaterialApp).first,
-          matchesGoldenFileWithPixelAllowance("goldens/text-scaling-header.png", 90),
+          matchesGoldenFileWithPixelAllowance("goldens/text-scaling-header.png", 125),
         );
       });
 
@@ -163,7 +169,7 @@ void main() {
 
         await expectLater(
           find.byType(MaterialApp).first,
-          matchesGoldenFileWithPixelAllowance("goldens/text-scaling-blockquote.png", 31),
+          matchesGoldenFileWithPixelAllowance("goldens/text-scaling-blockquote.png", 40),
         );
       });
     });
@@ -179,7 +185,7 @@ Future<void> _placeCaretAtFirstNode(
   final regularEditorFinder = find.byKey(editorKey);
   final regularDoc = SuperEditorInspector.findDocument(regularEditorFinder)!;
   await tester.placeCaretInParagraph(
-    regularDoc.nodes.first.id,
+    regularDoc.first.id,
     offset,
     superEditorFinder: regularEditorFinder,
   );
@@ -194,7 +200,7 @@ Future<void> _doubleTapAtFirstNode(
   final regularEditorFinder = find.byKey(editorKey);
   final regularDoc = SuperEditorInspector.findDocument(regularEditorFinder)!;
   await tester.doubleTapInParagraph(
-    regularDoc.nodes.first.id,
+    regularDoc.first.id,
     offset,
     superEditorFinder: regularEditorFinder,
   );

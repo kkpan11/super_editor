@@ -282,6 +282,26 @@ class _EditorToolbarState extends State<EditorToolbar> {
     ]);
   }
 
+  /// Toggles superscript styling for the current selected text.
+  void _toggleSuperscript() {
+    widget.editor!.execute([
+      ToggleTextAttributionsRequest(
+        documentRange: widget.composer.selection!,
+        attributions: {superscriptAttribution},
+      ),
+    ]);
+  }
+
+  /// Toggles subscript styling for the current selected text.
+  void _toggleSubscript() {
+    widget.editor!.execute([
+      ToggleTextAttributionsRequest(
+        documentRange: widget.composer.selection!,
+        attributions: {subscriptAttribution},
+      ),
+    ]);
+  }
+
   /// Returns true if the current text selection includes part
   /// or all of a single link, returns false if zero links are
   /// in the selection or if 2+ links are in the selection.
@@ -355,7 +375,7 @@ class _EditorToolbarState extends State<EditorToolbar> {
         // the entire link attribution.
         text.removeAttribution(
           overlappingLinkSpan.attribution,
-          SpanRange(overlappingLinkSpan.start, overlappingLinkSpan.end),
+          overlappingLinkSpan.range,
         );
       }
     } else {
@@ -370,7 +390,7 @@ class _EditorToolbarState extends State<EditorToolbar> {
   /// Takes the text from the [urlController] and applies it as a link
   /// attribution to the currently selected text.
   void _applyLink() {
-    final url = _urlController!.text.text;
+    final url = _urlController!.text.toPlainText(includePlaceholders: false);
 
     final selection = widget.composer.selection!;
     final baseOffset = (selection.base.nodePosition as TextPosition).offset;
@@ -384,7 +404,7 @@ class _EditorToolbarState extends State<EditorToolbar> {
 
     final trimmedRange = _trimTextRangeWhitespace(text, selectionRange);
 
-    final linkAttribution = LinkAttribution(url: Uri.parse(url));
+    final linkAttribution = LinkAttribution.fromUri(Uri.parse(url));
 
     widget.editor!.execute([
       AddTextAttributionsRequest(
@@ -403,7 +423,7 @@ class _EditorToolbarState extends State<EditorToolbar> {
     ]);
 
     // Clear the field and hide the URL bar
-    _urlController!.clear();
+    _urlController!.clearTextAndSelection();
     setState(() {
       _showUrlField = false;
       _urlFocusNode.unfocus(disposition: UnfocusDisposition.previouslyFocusedChild);
@@ -418,10 +438,11 @@ class _EditorToolbarState extends State<EditorToolbar> {
     int startOffset = range.start;
     int endOffset = range.end;
 
-    while (startOffset < range.end && text.text[startOffset] == ' ') {
+    final plainText = text.toPlainText();
+    while (startOffset < range.end && plainText[startOffset] == ' ') {
       startOffset += 1;
     }
-    while (endOffset > startOffset && text.text[endOffset] == ' ') {
+    while (endOffset > startOffset && plainText[endOffset] == ' ') {
       endOffset -= 1;
     }
 
@@ -573,6 +594,22 @@ class _EditorToolbarState extends State<EditorToolbar> {
               ),
               Center(
                 child: IconButton(
+                  onPressed: _toggleSuperscript,
+                  icon: const Icon(Icons.superscript),
+                  splashRadius: 16,
+                  tooltip: AppLocalizations.of(context)!.labelSuperscript,
+                ),
+              ),
+              Center(
+                child: IconButton(
+                  onPressed: _toggleSubscript,
+                  icon: const Icon(Icons.subscript),
+                  splashRadius: 16,
+                  tooltip: AppLocalizations.of(context)!.labelSubscript,
+                ),
+              ),
+              Center(
+                child: IconButton(
                   onPressed: _areMultipleLinksSelected() ? null : _onLinkPressed,
                   icon: const Icon(Icons.link),
                   color: _isSingleLinkSelected() ? const Color(0xFF007AFF) : IconTheme.of(context).color,
@@ -664,35 +701,28 @@ class _EditorToolbarState extends State<EditorToolbar> {
         child: Row(
           children: [
             Expanded(
-              child: Focus(
+              child: SuperTextField(
                 focusNode: _urlFocusNode,
-                parentNode: _popoverFocusNode,
-                // We use a SuperTextField instead of a TextField because TextField
-                // automatically re-parents its FocusNode, which causes #609. Flutter
-                // #106923 tracks the TextField issue.
-                child: SuperTextField(
-                  focusNode: _urlFocusNode,
-                  textController: _urlController,
-                  minLines: 1,
-                  maxLines: 1,
-                  inputSource: TextInputSource.ime,
-                  hintBehavior: HintBehavior.displayHintUntilTextEntered,
-                  hintBuilder: (context) {
-                    return const Text(
-                      "enter a url...",
-                      style: TextStyle(
-                        color: Colors.grey,
-                        fontSize: 16,
-                      ),
-                    );
-                  },
-                  textStyleBuilder: (_) {
-                    return const TextStyle(
-                      color: Colors.black,
+                textController: _urlController,
+                minLines: 1,
+                maxLines: 1,
+                inputSource: TextInputSource.ime,
+                hintBehavior: HintBehavior.displayHintUntilTextEntered,
+                hintBuilder: (context) {
+                  return const Text(
+                    "enter a url...",
+                    style: TextStyle(
+                      color: Colors.grey,
                       fontSize: 16,
-                    );
-                  },
-                ),
+                    ),
+                  );
+                },
+                textStyleBuilder: (_) {
+                  return const TextStyle(
+                    color: Colors.black,
+                    fontSize: 16,
+                  );
+                },
               ),
             ),
             IconButton(
@@ -704,7 +734,7 @@ class _EditorToolbarState extends State<EditorToolbar> {
                 setState(() {
                   _urlFocusNode.unfocus();
                   _showUrlField = false;
-                  _urlController!.clear();
+                  _urlController!.clearTextAndSelection();
                 });
               },
             ),
@@ -838,7 +868,7 @@ class _ImageFormatToolbarState extends State<ImageFormatToolbar> {
                   onPressed: _makeImageConfined,
                   icon: const Icon(Icons.photo_size_select_large),
                   splashRadius: 16,
-                  tooltip: AppLocalizations.of(context)!.labelBold,
+                  tooltip: AppLocalizations.of(context)!.labelLimitedWidth,
                 ),
               ),
               Center(
@@ -846,7 +876,7 @@ class _ImageFormatToolbarState extends State<ImageFormatToolbar> {
                   onPressed: _makeImageFullBleed,
                   icon: const Icon(Icons.photo_size_select_actual),
                   splashRadius: 16,
-                  tooltip: AppLocalizations.of(context)!.labelItalics,
+                  tooltip: AppLocalizations.of(context)!.labelFullWidth,
                 ),
               ),
             ],
