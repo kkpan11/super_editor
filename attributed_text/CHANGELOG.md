@@ -1,4 +1,34 @@
-## [X.Y.Z] - ???
+## [0.4.2] - Jan, 2024
+ * [FIX] - A few `AttributedText` methods weren't updated to account for full length with placeholders.
+
+## [0.4.1] - Jan, 2024
+ * [ADJUSTMENT] - Added a few queries for the character or the placeholder at a given text offset.
+
+## [0.4.0] - Dec, 2024
+ * [FEATURE] - Added support for placeholders in text, e.g., to render inline widgets.
+ * [ADJUSTMENT] - Upgrade `logging` to `v1.3.0`.
+
+## [0.3.3] - Aug, 2024
+ * Package metadata update - no functional changes.
+
+## [0.3.2] - June, 2024
+ * [FIX] - Crash when adding attributions that overlap others - you can now control whether a new attribution overwrites conflicting spans when you add it.
+
+## [0.3.1] - June, 2024
+ * [FEATURE] - Added query `getAllAttributionsThroughout()` to `AttributedText`.
+ * [FEATURE] - Added `copy()` to `AttributedText()`.
+ * [ADJUSTMENT] - Added ability to insert an attribution that splits an existing attribution.
+
+## [0.3.0] - Feb, 2024
+ * [BREAKING] - `AttributedText` and `SpanRange` constructors now use positional parameters istead of named parameters.
+ * [FIX] - `AttributedText` now supports differents links for different URLs in the same text blob - previously all links were sent to the same URL withing a single `AttributedText`.
+ * [FIX] - `collapseSpans` now reports the correct ending index, which was previously off by one.
+ * `AttributedText` now has a substring method and length property to avoid needing to access the inner `text` string.
+ * `AttributionSpan` now has a `range` property to get a non-directional span of text.
+ * `AttributedText` can visit and report attribution spans instead of just visiting individual attribution markers.
+ * Added query methods:
+   * `getAttributionSpans()`
+   * `getAttributionSpansByFilter()`
  * `AttributedText` now allows you to `addAttribution()` without auto-merging with preceding and following attributions (#1198)
 
 ## [0.2.2] - May, 2023

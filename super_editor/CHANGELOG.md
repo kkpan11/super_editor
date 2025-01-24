@@ -1,7 +1,135 @@
-## [x.y.z] - ???
- * FEATURE: Delete words in IME mode (#1161)
-   * Mac: `option + backspace` deletes a word upstream, `option + delete` deletes a word downstream
-   * Windows/Linux: `control + backspace` deletes a word upstream, `control + delete` deletes a word downstream
+## [0.3.0-dev.16] - Jan 24, 2024
+ * FIX: `KeyboardScaffoldSafeArea` in rare circumstances was trying to use `NaN` for bottom insets.
+ * FIX: On Safari/Firefox, double tapping on text closing the IME connection.
+
+## [0.3.0-dev.15] - Jan 17, 2024
+ * FEATURE: Spellcheck for mobile (when using the `super_editor_spellcheck` plugin).
+ * ADJUSTMENT: Upgrade to `attributed_text` `v0.4.2` (with some fixes to inline placeholders).
+
+## [0.3.0-dev.14] - Jan 14, 2024
+ * FIX: `KeyboardScaffoldSafeArea` breaks and defers to `MediaQuery` when there's only one in the tree.
+
+## [0.3.0-dev.13] - Jan 10, 2024
+ * BREAKING: All `DocumentNode`s are now immutable. To change a node, it must be copied and replaced.
+ * BREAKING: Newline insertion behavior is now configurable.
+   * All newlines are inserted with explicit `EditRequest`s, e.g., `InsertNewlineRequest`, `InsertSoftNewlineRequest`.
+   * The signature for mapping from `EditRequest` to `EditCommand` was adjusted.
+   * Some `EditRequest`s no longer support `const` construction.
+ * FIX: Make `KeyboardScaffoldSafeArea` work when not positioned at bottom of screen.
+ * FIX: Crash in tags plugin related to selection.
+ * FIX: Selection highlight issue with `SuperTextField`.
+ * FIX: Magnifier doesn't move offscreen.
+ * ADJUSTMENT: Email links launch with a "mailto:" scheme, and app links are linkified.
+ * ADJUSTMENT: Apps can override tap gestures.
+ * ADJUSTMENT: iOS tap word snapping is less aggressive.
+ * ADJUSTMENT: Upgraded `attributed_text` dependency to `v0.4.1`.
+
+## [0.3.0-dev.12] - Dec 23, 2024
+ * FEATURE: Added support for inline widgets.
+ * FEATURE: Created a `ClearDocumentRequest`, which deletes all content and moves caret to the start.
+ * FIX: Web - option + arrow selection changes.
+ * FIX: `SuperTextField` (iOS) - native content menu focal point was wrong.
+ * FIX: Action tag not identified and triggered in expected situations.
+ * ADJUSTMENT: `KeyboardPanelScaffold` supports opening a panel before opening the software keyboard.
+ * ADJUSTMENT: `getDocumentPositionAfterExpandedDeletion` returns `null` for collapsed selections.
+ * ADJUSTMENT: `TaskNode` checkbox sets visual density based on `ThemeData.visualDensity`.
+
+## [0.3.0-dev.11] - Nov 26, 2024
+ * FEATURE: Add an (optional) tap handler that automatically inserts empty paragraph
+   when user taps at the end of the document.
+ * FIX: `KeyboardScaffoldSafeArea` now initializes its insets in a way that works with
+   certain navigation use-cases that previously thought the keyboard was up when it's down.
+ * FIX: Honor the Android handle builders in the Android controls controller.
+ * ADJUSTMENT: Upgraded versions for a number of dependencies.
+
+## [0.3.0-dev.10] - Nov 18, 2024
+ * FEATURE: Created `KeyboardPanelScaffold` and `KeyboardScaffoldSafeArea` to aid with
+   implementing mobile phone messaging and chat experiences.
+ * FEATURE: Added ability to show the iOS native context popover toolbar when
+   editing a document. See `iOSSystemPopoverEditorToolbarWithFallbackBuilder`
+   and `IOSSystemContextMenu`.
+ * FEATURE: Plugins can now provide their own `ComponentBuilder`s.
+ * FEATURE: Can configure block nodes as "non-deletable".
+ * FIX: CMD + RIGHT caret movement on Web.
+ * FIX: Don't restore editor selection on refocus if document changed in way that
+   invalidates the previous selection.
+ * FIX: `shrinkWrap` as `true` no longer breaks `SuperEditor`.
+ * ADJUSTMENT: Remove custom gesture handlers in `SuperEditor` and `SuperReader`
+   and utilize Flutter's built-in behaviors.
+
+## [0.3.0-dev.9] - Sept 26, 2024
+ * FEATURE: Indent for blockquotes.
+
+## [0.3.0-dev.8] - Sept 24, 2024
+ * ADJUSTMENT: Change mobile caret overlays to use `Timer`s instead of `Ticker`s
+   to prevent frame churn.
+
+## [0.3.0-dev.7] - Sept 24, 2024
+ * ADJUSTMENT: Change `super_text_layout` dependency from v0.1.13 to v0.1.14.
+
+## [0.3.0-dev.6] - Sept 15, 2024
+ * FIX: Don't cut off iOS drag handles in `SuperEditor`.
+ * ADJUSTMENT: Increase iOS drag handle interaction area in `SuperTextField`.
+
+## [0.3.0-dev.5] - Aug 27, 2024
+ * FEATURE: Add configurable underlines to `TextWithHintComponent`.
+ * ADJUSTMENT: Increase the types of attributions that are automatically extended when typing immediately after those attributions.
+ * ADJUSTMENT: Convert floating cursor geometry to document coordinates.
+ * FIX: Retain desired composing attributions when collapsing an expanded selection.
+ * FIX: (Android) auto-scroll when selection changes.
+
+## [0.3.0-dev.4] - Aug 17, 2024
+ * Package metadata update - no functional changes.
+
+## [0.3.0-dev.3] - Aug 16, 2024
+ * DEPENDENCY: Upgraded `super_text_layout` to `v0.1.11`.
+ * BREAKING: Remove `nodes` list from `Document` API in preparation for immutable `Document`s.
+ * BREAKING: When inserting new nodes, make copies of the provided nodes instead of
+   retaining the original node, so that undo/redo can restore the original state.
+ * FEATURE: Undo/redo (partial implementation, off by default).
+ * FEATURE: Can apply arbitrary underline decorations to text in documents.
+ * ADJUSTMENT: Deprecated `document` and `composer` properties of `SuperEditor` - they're not read
+   directly from the `Editor`.
+ * ADJUSTMENT: Added extension methods on `Editor` to access `document` and `composer` directly.
+ * ADJUSTMENT: Selection-by-word on Android.
+ * ADJUSTMENT: Mobile text selection handle appearance.
+ * ADJUSTMENT: Dragging to change selection on Android plays haptic feedback.
+ * FIX: Crash on long press over non-text node.
+ * FIX: Caret was blinking while being dragged (should stop blinking).
+ * FIX: Crash when merging paragraphs (Mac).
+ * FIX: Exception thrown when pressing ESC while composing an action tag.
+ * FIX: Vertical scrolling on multi-line `SuperTextField` now works.
+ * FIX: List item component styles are respected when the stylesheet doesn't specify 
+   list item styles.
+ * FIX: Horizontal drag and editor scrolling.
+
+## [0.3.0-dev.2] - July 2, 2024
+ * DEPENDENCY: Upgraded `attributed_text` to `v0.3.2`.
+ * FEATURE: Tasks can now be indented.
+ * FEATURE: Can convert a paragraph to a task.
+ * FIX: Tasks can be created in the "completed" state.
+ * FEATURE: Added attributions for font family, superscript, and subscript.
+ * ADJUSTMENT: (iOS) - place caret at word boundary on tap.
+ * ADJUSTMENT: (Android) - increased touch area for selection handles.
+ * FEATURE: Automatic linkification for Markdown as the user types.
+ * FIX: Crash in linkification reaction.
+ * FIX: Crash in `SelectedTextColorStrategy`.
+
+## [0.3.0-dev.1] - June 10, 2024
+MAJOR UPDATE: First taste of the new editor pipeline. 
+
+This is a dev release so that you can begin to see the changes coming in the next major version. 
+This release comes with numerous and significant breaking changes. As we get closer to stability 
+for the next release, we'll add website guides to help update all of our users. 
+
+The primary features that we've been working on since last release include:
+ * Undo/Redo
+ * A stable edit pipeline: requests > commands > change list > reactions > listeners
+ * Common reaction features, e.g., hash tags and user tagging
+
+In addition to the major feature work, we've made hundreds of little adjustments, including bugfixes.
+
+We expect a steady stream of dev releases from this point forward, until we reach `v0.3.0`.
 
 ## [0.2.6] - May 28, 2023
  * FEATURE: `SuperReader` now launches URLs when tapping a link (#1151)

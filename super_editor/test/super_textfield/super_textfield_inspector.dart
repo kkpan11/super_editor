@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:super_editor/super_editor.dart';
@@ -113,6 +114,22 @@ class SuperTextFieldInspector {
     return !isSingleLine(superTextFieldFinder);
   }
 
+  /// Returns `true` if the given [SuperTextField] is scrollable, i.e., the content
+  /// exceeds the viewport size.
+  static bool hasScrollableExtent([Finder? superTextFieldFinder]) {
+    final desktopScrollController = findDesktopScrollController(superTextFieldFinder);
+    if (desktopScrollController != null) {
+      return desktopScrollController.position.maxScrollExtent > 0;
+    }
+
+    final mobileScrollController = findMobileScrollController(superTextFieldFinder);
+    if (mobileScrollController != null) {
+      return mobileScrollController.endScrollOffset > 0;
+    }
+
+    throw Exception("Couldn't find a SuperTextField to check the scrollable extent. Finder: $superTextFieldFinder");
+  }
+
   /// Returns `true` if the given [SuperTextField] has a scroll offset of zero, i.e.,
   /// is scrolled to the beginning of the viewport.
   ///
@@ -173,6 +190,38 @@ class SuperTextFieldInspector {
     return textScrollView.textScrollController.scrollOffset;
   }
 
+  static double? findMaxScrollOffset([Finder? superTextFieldFinder]) {
+    final finder = superTextFieldFinder ?? find.byType(SuperTextField);
+
+    final fieldFinder = findInnerPlatformTextField(finder);
+    final match = fieldFinder.evaluate().single.widget;
+
+    if (match is SuperDesktopTextField) {
+      final textScrollViewElement = find
+          .descendant(
+            of: finder,
+            matching: find.byType(SuperTextFieldScrollview),
+          )
+          .evaluate()
+          .single as StatefulElement;
+      final textScrollView = textScrollViewElement.widget as SuperTextFieldScrollview;
+
+      return textScrollView.scrollController.position.maxScrollExtent;
+    }
+
+    // Both mobile textfields use TextScrollView.
+    final textScrollViewElement = find
+        .descendant(
+          of: finder,
+          matching: find.byType(TextScrollView),
+        )
+        .evaluate()
+        .single as StatefulElement;
+    final textScrollView = textScrollViewElement.widget as TextScrollView;
+
+    return textScrollView.textScrollController.endScrollOffset;
+  }
+
   static ScrollController? findDesktopScrollController([Finder? superTextFieldFinder]) {
     final finder = superTextFieldFinder ?? find.byType(SuperTextField);
 
@@ -214,6 +263,70 @@ class SuperTextFieldInspector {
     final textScrollView = textScrollViewElement.widget as TextScrollView;
 
     return textScrollView.textScrollController;
+  }
+
+  /// Finds and returns the bounding rectangle for the caret in the given [SuperTextField],
+  /// represented as coordinates that are local to the viewport.
+  ///
+  /// The viewport is the rectangle within which (possibly) scrollable text is displayed.
+  ///
+  /// {@macro supertextfield_finder}
+  static Rect? findCaretRectInViewport([Finder? superTextFieldFinder]) {
+    final rootFieldFinder = superTextFieldFinder ?? find.byType(SuperTextField);
+
+    final desktopTextField = find.descendant(of: rootFieldFinder, matching: find.byType(SuperDesktopTextField));
+    if (desktopTextField.evaluate().isNotEmpty) {
+      return _findCaretRectInViewportOnDesktop(desktopTextField);
+    }
+
+    final iOSTextField = find.descendant(of: rootFieldFinder, matching: find.byType(SuperIOSTextField));
+    if (iOSTextField.evaluate().isNotEmpty) {
+      return _findCaretRectInViewportOnMobile(iOSTextField);
+    }
+
+    final androidTextField = find.descendant(of: rootFieldFinder, matching: find.byType(SuperAndroidTextField));
+    if (androidTextField.evaluate().isNotEmpty) {
+      return _findCaretRectInViewportOnMobile(androidTextField);
+    }
+
+    throw Exception(
+        "Couldn't find the caret rectangle because we couldn't find a SuperTextField. Finder: $superTextFieldFinder");
+  }
+
+  static Rect? _findCaretRectInViewportOnDesktop(Finder desktopTextField) {
+    final viewport = find
+        .descendant(of: desktopTextField, matching: find.byType(SuperTextFieldScrollview))
+        .evaluate()
+        .single
+        .renderObject as RenderBox;
+
+    final caretDisplayElement = find
+        .descendant(of: desktopTextField, matching: find.byType(TextLayoutCaret))
+        .evaluate()
+        .single as StatefulElement;
+    final caretDisplay = caretDisplayElement.state as TextLayoutCaretState;
+    final caretGlobalRect = caretDisplay.globalCaretGeometry!;
+
+    final viewportOffset = viewport.localToGlobal(Offset.zero);
+    return caretGlobalRect.translate(-viewportOffset.dx, -viewportOffset.dy);
+  }
+
+  static Rect? _findCaretRectInViewportOnMobile(Finder mobileFieldFinder) {
+    final viewport = find
+        .descendant(of: mobileFieldFinder, matching: find.byType(TextScrollView))
+        .evaluate()
+        .single
+        .renderObject as RenderBox;
+
+    final caretDisplayElement = find
+        .descendant(of: mobileFieldFinder, matching: find.byType(TextLayoutCaret))
+        .evaluate()
+        .single as StatefulElement;
+    final caretDisplay = caretDisplayElement.state as TextLayoutCaretState;
+    final caretGlobalRect = caretDisplay.globalCaretGeometry!;
+
+    final viewportOffset = viewport.localToGlobal(Offset.zero);
+    return caretGlobalRect.translate(-viewportOffset.dx, -viewportOffset.dy);
   }
 
   static bool isAndroidCollapsedHandleVisible([Finder? superTextFieldFinder]) {

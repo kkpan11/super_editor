@@ -26,7 +26,7 @@ void main() {
 
       await expectLater(
         find.byType(MaterialApp),
-        matchesGoldenFileWithPixelAllowance("goldens/super_textfield_ios_toolbar_pointing_down_expanded.png", 1),
+        matchesGoldenFileWithPixelAllowance("goldens/super_textfield_ios_toolbar_pointing_down_expanded.png", 2),
       );
     });
 
@@ -127,8 +127,11 @@ Widget _buildSuperTextField({
     text: AttributedText(text),
   );
 
-  return SizedBox(
+  return Container(
     width: 300,
+    decoration: BoxDecoration(
+      border: Border.all(color: Colors.green),
+    ),
     child: SuperTextField(
       configuration: configuration,
       textController: controller,

@@ -26,12 +26,7 @@ class _ActionTagsFeatureDemoState extends State<ActionTagsFeatureDemo> {
   void initState() {
     super.initState();
 
-    _document = MutableDocument(nodes: [
-      ParagraphNode(
-        id: Editor.createNodeId(),
-        text: AttributedText(""),
-      ),
-    ]);
+    _document = MutableDocument.empty();
     _composer = MutableDocumentComposer();
     _editor = Editor(
       editables: {
@@ -39,7 +34,7 @@ class _ActionTagsFeatureDemoState extends State<ActionTagsFeatureDemo> {
         Editor.composerKey: _composer,
       },
       requestHandlers: [
-        (request) => request is ConvertSelectedTextNodeRequest //
+        (editor, request) => request is ConvertSelectedTextNodeRequest //
             ? ConvertSelectedTextNodeCommand(request.newType)
             : null,
         ...defaultRequestHandlers,
@@ -68,18 +63,18 @@ class _ActionTagsFeatureDemoState extends State<ActionTagsFeatureDemo> {
     setState(() {
       _actions.clear();
 
-      for (final node in _document.nodes) {
+      for (final node in _document) {
         if (node is! TextNode) {
           continue;
         }
 
         final actionSpans = node.text.getAttributionSpansInRange(
           attributionFilter: (a) => a == actionTagComposingAttribution,
-          range: SpanRange(0, node.text.text.length - 1),
+          range: SpanRange(0, node.text.length - 1),
         );
 
         for (final actionSpan in actionSpans) {
-          _actions.add(node.text.text.substring(actionSpan.start, actionSpan.end + 1));
+          _actions.add(node.text.substring(actionSpan.start, actionSpan.end + 1));
         }
       }
     });
@@ -111,50 +106,47 @@ class _ActionTagsFeatureDemoState extends State<ActionTagsFeatureDemo> {
   }
 
   Widget _buildEditor() {
-    return IntrinsicHeight(
-      child: SuperEditor(
-        editor: _editor,
-        document: _document,
-        composer: _composer,
-        focusNode: _editorFocusNode,
-        componentBuilders: [
-          TaskComponentBuilder(_editor),
-          ...defaultComponentBuilders,
-        ],
-        stylesheet: defaultStylesheet.copyWith(
-          inlineTextStyler: (attributions, existingStyle) {
-            TextStyle style = defaultInlineTextStyler(attributions, existingStyle);
+    return SuperEditor(
+      editor: _editor,
+      focusNode: _editorFocusNode,
+      componentBuilders: [
+        TaskComponentBuilder(_editor),
+        ...defaultComponentBuilders,
+      ],
+      shrinkWrap: true,
+      stylesheet: defaultStylesheet.copyWith(
+        inlineTextStyler: (attributions, existingStyle) {
+          TextStyle style = defaultInlineTextStyler(attributions, existingStyle);
 
-            if (attributions.contains(actionTagComposingAttribution)) {
-              style = style.copyWith(
-                color: Colors.blue,
-              );
-            }
+          if (attributions.contains(actionTagComposingAttribution)) {
+            style = style.copyWith(
+              color: Colors.blue,
+            );
+          }
 
-            return style;
-          },
-          addRulesAfter: [
-            ...darkModeStyles,
-          ],
-        ),
-        documentOverlayBuilders: [
-          AttributedTextBoundsOverlay(
-            selector: (a) => a == actionTagComposingAttribution,
-            builder: (BuildContext context, Attribution attribution) {
-              return Leader(
-                link: _composingLink,
-                child: const SizedBox(),
-              );
-            },
-          ),
-          DefaultCaretOverlayBuilder(
-            caretStyle: CaretStyle().copyWith(color: Colors.redAccent),
-          ),
-        ],
-        plugins: {
-          _actionTagPlugin,
+          return style;
         },
+        addRulesAfter: [
+          ...darkModeStyles,
+        ],
       ),
+      documentOverlayBuilders: [
+        AttributedTextBoundsOverlay(
+          selector: (a) => a == actionTagComposingAttribution,
+          builder: (BuildContext context, Attribution attribution) {
+            return Leader(
+              link: _composingLink,
+              child: const SizedBox(),
+            );
+          },
+        ),
+        DefaultCaretOverlayBuilder(
+          caretStyle: CaretStyle().copyWith(color: Colors.redAccent),
+        ),
+      ],
+      plugins: {
+        _actionTagPlugin,
+      },
     );
   }
 
@@ -303,7 +295,7 @@ class ConvertSelectedTextNodeRequest implements EditRequest {
   int get hashCode => newType.hashCode;
 }
 
-class ConvertSelectedTextNodeCommand implements EditCommand {
+class ConvertSelectedTextNodeCommand extends EditCommand {
   ConvertSelectedTextNodeCommand(this.newType);
 
   final TextNodeType newType;

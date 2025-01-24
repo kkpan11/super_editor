@@ -1,3 +1,4 @@
+import 'dart:ui';
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
@@ -18,14 +19,17 @@ import 'package:super_editor/src/document_operations/selection_operations.dart';
 import 'package:super_editor/src/infrastructure/_logging.dart';
 import 'package:super_editor/src/infrastructure/content_layers.dart';
 import 'package:super_editor/src/infrastructure/flutter/build_context.dart';
+import 'package:super_editor/src/infrastructure/flutter/eager_pan_gesture_recognizer.dart';
 import 'package:super_editor/src/infrastructure/flutter/flutter_scheduler.dart';
 import 'package:super_editor/src/infrastructure/multi_tap_gesture.dart';
 import 'package:super_editor/src/infrastructure/platforms/android/android_document_controls.dart';
+import 'package:super_editor/src/infrastructure/platforms/android/drag_handle_selection.dart';
 import 'package:super_editor/src/infrastructure/platforms/android/long_press_selection.dart';
 import 'package:super_editor/src/infrastructure/platforms/android/magnifier.dart';
 import 'package:super_editor/src/infrastructure/platforms/android/selection_handles.dart';
 import 'package:super_editor/src/infrastructure/platforms/mobile_documents.dart';
 import 'package:super_editor/src/infrastructure/signal_notifier.dart';
+import 'package:super_editor/src/infrastructure/sliver_hybrid_stack.dart';
 import 'package:super_editor/src/infrastructure/touch_controls.dart';
 
 import '../infrastructure/document_gestures.dart';
@@ -133,7 +137,7 @@ class SuperEditorAndroidControlsController {
 
   /// Whether the caret should blink right now.
   ValueListenable<bool> get shouldCaretBlink => _shouldCaretBlink;
-  final _shouldCaretBlink = ValueNotifier<bool>(false);
+  final _shouldCaretBlink = ValueNotifier<bool>(true);
 
   /// Tells the caret to blink by setting [shouldCaretBlink] to `true`.
   void blinkCaret() {
@@ -255,6 +259,29 @@ class SuperEditorAndroidControlsController {
     }
   }
 
+  /// {@template are_selection_handles_allowed}
+  /// Whether or not the selection handles are allowed to be displayed.
+  ///
+  /// Typically, whenever the selection changes the drag handles are displayed. However,
+  /// there are some cases where we want to select some content, but don't show the
+  /// drag handles. For example, when the user taps a misspelled word, we might want to select
+  /// the misspelled word without showing any handles.
+  ///
+  /// Defaults to `true`.
+  /// {@endtemplate}
+  ValueListenable<bool> get areSelectionHandlesAllowed => _areSelectionHandlesAllowed;
+  final _areSelectionHandlesAllowed = ValueNotifier<bool>(true);
+
+  /// Temporarily prevents any selection handles from being displayed.
+  ///
+  /// Call this when you want to select some content, but don't want to show the drag handles.
+  /// [allowSelectionHandles] must be called to allow the drag handles to be displayed again.
+  void preventSelectionHandles() => _areSelectionHandlesAllowed.value = false;
+
+  /// Allows the selection handles to be displayed after they have been temporarily
+  /// prevented by [preventSelectionHandles].
+  void allowSelectionHandles() => _areSelectionHandlesAllowed.value = true;
+
   /// (Optional) Builder to create the visual representation of the expanded drag handles.
   ///
   /// If [expandedHandlesBuilder] is `null`, default Android handles are displayed.
@@ -323,7 +350,10 @@ class SuperEditorAndroidControlsController {
 /// floating toolbar.
 class SuperEditorAndroidToolbarFocalPointDocumentLayerBuilder implements SuperEditorLayerBuilder {
   const SuperEditorAndroidToolbarFocalPointDocumentLayerBuilder({
-    // ignore: unused_element
+    // TODO(srawlins): `unused_element`, when reporting a parameter, is being
+    // renamed to `unused_element_parameter`. For now, ignore each; when the SDK
+    // constraint is >= 3.6.0, just ignore `unused_element_parameter`.
+    // ignore: unused_element, unused_element_parameter
     this.showDebugLeaderBounds = false,
   });
 
@@ -353,12 +383,15 @@ class SuperEditorAndroidToolbarFocalPointDocumentLayerBuilder implements SuperEd
 class SuperEditorAndroidHandlesDocumentLayerBuilder implements SuperEditorLayerBuilder {
   const SuperEditorAndroidHandlesDocumentLayerBuilder({
     this.caretColor,
+    this.caretWidth = 2,
   });
 
   /// The (optional) color of the caret (not the drag handle), by default the color
   /// defers to the root [SuperEditorAndroidControlsScope], or the app theme if the
   /// controls controller has no preference for the color.
   final Color? caretColor;
+
+  final double caretWidth;
 
   @override
   ContentLayerWidget build(BuildContext context, SuperEditorContext editContext) {
@@ -379,6 +412,7 @@ class SuperEditorAndroidHandlesDocumentLayerBuilder implements SuperEditorLayerB
           const ClearComposingRegionRequest(),
         ]);
       },
+      caretWidth: caretWidth,
       caretColor: caretColor,
     );
   }
@@ -394,12 +428,15 @@ class AndroidDocumentTouchInteractor extends StatefulWidget {
     required this.document,
     required this.getDocumentLayout,
     required this.selection,
+    this.openKeyboardWhenTappingExistingSelection = true,
+    required this.openSoftwareKeyboard,
     required this.scrollController,
-    this.contentTapHandler,
+    required this.fillViewport,
+    this.contentTapHandlers,
     this.dragAutoScrollBoundary = const AxisOffset.symmetric(54),
     required this.dragHandleAutoScroller,
     this.showDebugPaint = false,
-    this.child,
+    required this.child,
   }) : super(key: key);
 
   final FocusNode focusNode;
@@ -409,9 +446,18 @@ class AndroidDocumentTouchInteractor extends StatefulWidget {
   final DocumentLayout Function() getDocumentLayout;
   final ValueListenable<DocumentSelection?> selection;
 
-  /// Optional handler that responds to taps on content, e.g., opening
+  /// {@macro openKeyboardWhenTappingExistingSelection}
+  final bool openKeyboardWhenTappingExistingSelection;
+
+  /// A callback that should open the software keyboard when invoked.
+  final VoidCallback openSoftwareKeyboard;
+
+  /// Optional list of handlers that respond to taps on content, e.g., opening
   /// a link when the user taps on text with a link attribution.
-  final ContentTapDelegate? contentTapHandler;
+  ///
+  /// If a handler returns [TapHandlingInstruction.halt], no subsequent handlers
+  /// nor the default tap behavior will be executed.
+  final List<ContentTapDelegate>? contentTapHandlers;
 
   final ScrollController scrollController;
 
@@ -424,9 +470,13 @@ class AndroidDocumentTouchInteractor extends StatefulWidget {
 
   final ValueNotifier<DragHandleAutoScroller?> dragHandleAutoScroller;
 
+  /// Whether the document gesture detector should fill the entire viewport
+  /// even if the actual content is smaller.
+  final bool fillViewport;
+
   final bool showDebugPaint;
 
-  final Widget? child;
+  final Widget child;
 
   @override
   State createState() => _AndroidDocumentTouchInteractorState();
@@ -436,14 +486,9 @@ class _AndroidDocumentTouchInteractorState extends State<AndroidDocumentTouchInt
     with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   SuperEditorAndroidControlsController? _controlsController;
 
-  bool _isScrolling = false;
-
   // The ScrollPosition attached to the _ancestorScrollable, if there's an ancestor
   // Scrollable.
   ScrollPosition? _ancestorScrollPosition;
-  // The actual ScrollPosition that's used for the document layout, either
-  // the Scrollable installed by this interactor, or an ancestor Scrollable.
-  ScrollPosition? _activeScrollPosition;
 
   Offset? _globalTapDownOffset;
   Offset? _globalStartDragOffset;
@@ -452,9 +497,6 @@ class _AndroidDocumentTouchInteractorState extends State<AndroidDocumentTouchInt
   double? _dragStartScrollOffset;
   Offset? _globalDragOffset;
 
-  /// Holds the drag gesture that scrolls the document.
-  Drag? _scrollingDrag;
-
   final _magnifierGlobalOffset = ValueNotifier<Offset?>(null);
 
   Timer? _tapDownLongPressTimer;
@@ -462,6 +504,12 @@ class _AndroidDocumentTouchInteractorState extends State<AndroidDocumentTouchInt
   AndroidDocumentLongPressSelectionStrategy? _longPressStrategy;
 
   bool _isCaretDragInProgress = false;
+
+  // Cached view metrics to ignore unnecessary didChangeMetrics calls.
+  Size? _lastSize;
+  ViewPadding? _lastInsets;
+
+  final _interactor = GlobalKey();
 
   @override
   void initState() {
@@ -474,8 +522,6 @@ class _AndroidDocumentTouchInteractorState extends State<AndroidDocumentTouchInt
       getViewportBox: () => viewportBox,
     );
 
-    _configureScrollController();
-
     widget.document.addListener(_onDocumentChange);
     widget.selection.addListener(_onSelectionChange);
 
@@ -486,17 +532,13 @@ class _AndroidDocumentTouchInteractorState extends State<AndroidDocumentTouchInt
   void didChangeDependencies() {
     super.didChangeDependencies();
 
+    final view = View.of(context);
+    _lastSize = view.physicalSize;
+    _lastInsets = view.viewInsets;
+
     _controlsController = SuperEditorAndroidControlsScope.rootOf(context);
 
     _ancestorScrollPosition = context.findAncestorScrollableWithVerticalScroll?.position;
-
-    // On the next frame, check if our active scroll position changed to a
-    // different instance. If it did, move our listener to the new one.
-    //
-    // This is posted to the next frame because the first time this method
-    // runs, we haven't attached to our own ScrollController yet, so
-    // this.scrollPosition might be null.
-    onNextFrame((_) => _updateScrollPositionListener());
   }
 
   @override
@@ -512,15 +554,24 @@ class _AndroidDocumentTouchInteractorState extends State<AndroidDocumentTouchInt
       oldWidget.selection.removeListener(_onSelectionChange);
       widget.selection.addListener(_onSelectionChange);
     }
-
-    if (widget.scrollController != oldWidget.scrollController) {
-      _teardownScrollController();
-      _configureScrollController();
-    }
   }
 
   @override
   void didChangeMetrics() {
+    // It is possible to get the notification even though the metrics for view are same.
+    final view = View.of(context);
+    final size = view.physicalSize;
+    final insets = view.viewInsets;
+    if (size == _lastSize &&
+        _lastInsets?.left == insets.left &&
+        _lastInsets?.right == insets.right &&
+        _lastInsets?.top == insets.top &&
+        _lastInsets?.bottom == insets.bottom) {
+      return;
+    }
+    _lastSize = size;
+    _lastInsets = insets;
+
     // The available screen dimensions may have changed, e.g., due to keyboard
     // appearance/disappearance. Reflow the layout. Use a post-frame callback
     // to give the rest of the UI a chance to reflow, first.
@@ -539,8 +590,6 @@ class _AndroidDocumentTouchInteractorState extends State<AndroidDocumentTouchInt
 
     widget.document.removeListener(_onDocumentChange);
     widget.selection.removeListener(_onSelectionChange);
-
-    _teardownScrollController();
 
     widget.dragHandleAutoScroller.value!.dispose();
     widget.dragHandleAutoScroller.value = null;
@@ -572,9 +621,7 @@ class _AndroidDocumentTouchInteractorState extends State<AndroidDocumentTouchInt
   /// If this widget doesn't have an ancestor `Scrollable`, then this
   /// widget includes a `ScrollView` and this `State`'s render object
   /// is the viewport `RenderBox`.
-  RenderBox get viewportBox =>
-      (context.findAncestorScrollableWithVerticalScroll?.context.findRenderObject() ?? context.findRenderObject())
-          as RenderBox;
+  RenderBox get viewportBox => context.findViewportBox();
 
   Offset _getDocumentOffsetFromGlobalOffset(Offset globalOffset) {
     return _docLayout.getDocumentOffsetFromAncestorOffset(globalOffset);
@@ -584,6 +631,9 @@ class _AndroidDocumentTouchInteractorState extends State<AndroidDocumentTouchInt
     final globalOffset = _docLayout.getGlobalOffsetFromDocumentOffset(documentOffset);
     return viewportBox.globalToLocal(globalOffset);
   }
+
+  /// Returns the render box for the interactor gesture detector.
+  RenderBox get interactorBox => _interactor.currentContext!.findRenderObject() as RenderBox;
 
   /// Maps the given [interactorOffset] within the interactor's coordinate space
   /// to the same screen position in the viewport's coordinate space.
@@ -596,44 +646,9 @@ class _AndroidDocumentTouchInteractorState extends State<AndroidDocumentTouchInt
   Offset _interactorOffsetInViewport(Offset interactorOffset) {
     // Viewport might be our box, or an ancestor box if we're inside someone
     // else's Scrollable.
-    final interactorBox = context.findRenderObject() as RenderBox;
     return viewportBox.globalToLocal(
       interactorBox.localToGlobal(interactorOffset),
     );
-  }
-
-  void _configureScrollController() {
-    onNextFrame((_) => scrollPosition.isScrollingNotifier.addListener(_onScrollActivityChange));
-  }
-
-  void _teardownScrollController() {
-    widget.scrollController.removeListener(_onScrollActivityChange);
-
-    if (widget.scrollController.hasClients) {
-      scrollPosition.isScrollingNotifier.removeListener(_onScrollActivityChange);
-    }
-  }
-
-  void _onScrollActivityChange() {
-    final isScrolling = scrollPosition.isScrollingNotifier.value;
-
-    if (isScrolling) {
-      _isScrolling = true;
-
-      // The user started to scroll.
-      // Cancel the timer to stop trying to detect a long press.
-      _tapDownLongPressTimer?.cancel();
-      _tapDownLongPressTimer = null;
-    } else {
-      onNextFrame((_) {
-        // Set our scrolling flag to false on the next frame, so that our tap handlers
-        // have an opportunity to see that the scrollable was scrolling when the user
-        // tapped down.
-        //
-        // See the "on tap down" handler for more info about why this flag is important.
-        _isScrolling = false;
-      });
-    }
   }
 
   void _ensureSelectionExtentIsVisible() {
@@ -668,28 +683,23 @@ class _AndroidDocumentTouchInteractorState extends State<AndroidDocumentTouchInt
         ..hideExpandedHandles()
         ..hideMagnifier()
         ..hideToolbar();
+      return;
+    }
+
+    // Only scroll the editor to reveal the selection extent if the selection is
+    // collapsed. If the selection is expanded, the user is likely dragging
+    // a selection handle, which already causes auto-scrolling to reveal
+    // the selection extent. If the selection is expanded because the user
+    // double-tapped, the first tap will have already scrolled the editor to
+    // reveal the selection.
+    if (widget.selection.value?.isCollapsed == true) {
+      onNextFrame((_) {
+        _ensureSelectionExtentIsVisible();
+      });
     }
   }
 
-  void _updateScrollPositionListener() {
-    final newScrollPosition = scrollPosition;
-    if (newScrollPosition != _activeScrollPosition) {
-      _activeScrollPosition = newScrollPosition;
-    }
-  }
-
-  bool _wasScrollingOnTapDown = false;
   void _onTapDown(TapDownDetails details) {
-    // When the user scrolls and releases, the scrolling continues with momentum.
-    // If the user then taps down again, the momentum stops. When this happens, we
-    // still receive tap callbacks. But we don't want to take any further action,
-    // like moving the caret, when the user taps to stop scroll momentum. We have
-    // to carefully watch the scrolling activity to recognize when this happens.
-    // We can't check whether we're scrolling in "on tap up" because by then the
-    // scrolling has already stopped. So we log whether we're scrolling "on tap down"
-    // and then check this flag in "on tap up".
-    _wasScrollingOnTapDown = _isScrolling;
-
     final position = scrollPosition;
     if (position is ScrollPositionWithSingleContext) {
       position.goIdle();
@@ -700,6 +710,11 @@ class _AndroidDocumentTouchInteractorState extends State<AndroidDocumentTouchInt
     if (!disableLongPressSelectionForSuperlist) {
       _tapDownLongPressTimer = Timer(kLongPressTimeout, _onLongPressDown);
     }
+  }
+
+  void _onTapCancel() {
+    _tapDownLongPressTimer?.cancel();
+    _tapDownLongPressTimer = null;
   }
 
   // Runs when a tap down has lasted long enough to signify a long-press.
@@ -740,27 +755,29 @@ class _AndroidDocumentTouchInteractorState extends State<AndroidDocumentTouchInt
       return;
     }
 
-    if (_wasScrollingOnTapDown) {
-      // The scrollable was scrolling when the user touched down. We expect that the
-      // touch down stopped the scrolling momentum. We don't want to take any further
-      // action on this touch event. The user will tap again to change the selection.
-      return;
-    }
-
     editorGesturesLog.info("Tap down on document");
     final docOffset = _getDocumentOffsetFromGlobalOffset(details.globalPosition);
     editorGesturesLog.fine(" - document offset: $docOffset");
-    final docPosition = _docLayout.getDocumentPositionNearestToOffset(docOffset);
-    editorGesturesLog.fine(" - tapped document position: $docPosition");
 
-    if (widget.contentTapHandler != null && docPosition != null) {
-      final result = widget.contentTapHandler!.onTap(docPosition);
-      if (result == TapHandlingInstruction.halt) {
-        // The custom tap handler doesn't want us to react at all
-        // to the tap.
-        return;
+    if (widget.contentTapHandlers != null) {
+      for (final handler in widget.contentTapHandlers!) {
+        final result = handler.onTap(
+          DocumentTapDetails(
+            documentLayout: _docLayout,
+            layoutOffset: docOffset,
+            globalOffset: details.globalPosition,
+          ),
+        );
+        if (result == TapHandlingInstruction.halt) {
+          // The custom tap handler doesn't want us to react at all
+          // to the tap.
+          return;
+        }
       }
     }
+
+    final docPosition = _docLayout.getDocumentPositionNearestToOffset(docOffset);
+    editorGesturesLog.fine(" - tapped document position: $docPosition");
 
     bool didTapOnExistingSelection = false;
     if (docPosition != null) {
@@ -793,6 +810,14 @@ class _AndroidDocumentTouchInteractorState extends State<AndroidDocumentTouchInt
 
     _showAndHideEditingControlsAfterTapSelection(didTapOnExistingSelection: didTapOnExistingSelection);
 
+    if (didTapOnExistingSelection && widget.openKeyboardWhenTappingExistingSelection) {
+      // The user tapped on the existing selection. Show the software keyboard.
+      //
+      // If the user didn't tap on an existing selection, the software keyboard will
+      // already be visible.
+      widget.openSoftwareKeyboard();
+    }
+
     widget.focusNode.requestFocus();
   }
 
@@ -800,17 +825,26 @@ class _AndroidDocumentTouchInteractorState extends State<AndroidDocumentTouchInt
     editorGesturesLog.info("Double tap down on document");
     final docOffset = _getDocumentOffsetFromGlobalOffset(details.globalPosition);
     editorGesturesLog.fine(" - document offset: $docOffset");
-    final docPosition = _docLayout.getDocumentPositionNearestToOffset(docOffset);
-    editorGesturesLog.fine(" - tapped document position: $docPosition");
 
-    if (docPosition != null && widget.contentTapHandler != null) {
-      final result = widget.contentTapHandler!.onDoubleTap(docPosition);
-      if (result == TapHandlingInstruction.halt) {
-        // The custom tap handler doesn't want us to react at all
-        // to the tap.
-        return;
+    if (widget.contentTapHandlers != null) {
+      for (final handler in widget.contentTapHandlers!) {
+        final result = handler.onDoubleTap(
+          DocumentTapDetails(
+            documentLayout: _docLayout,
+            layoutOffset: docOffset,
+            globalOffset: details.globalPosition,
+          ),
+        );
+        if (result == TapHandlingInstruction.halt) {
+          // The custom tap handler doesn't want us to react at all
+          // to the tap.
+          return;
+        }
       }
     }
+
+    final docPosition = _docLayout.getDocumentPositionNearestToOffset(docOffset);
+    editorGesturesLog.fine(" - tapped document position: $docPosition");
 
     if (docPosition != null) {
       final tappedComponent = _docLayout.getComponentByNodeId(docPosition.nodeId)!;
@@ -874,18 +908,26 @@ class _AndroidDocumentTouchInteractorState extends State<AndroidDocumentTouchInt
     editorGesturesLog.info("Triple tap down on document");
     final docOffset = _getDocumentOffsetFromGlobalOffset(details.globalPosition);
     editorGesturesLog.fine(" - document offset: $docOffset");
-    final docPosition = _docLayout.getDocumentPositionNearestToOffset(docOffset);
-    editorGesturesLog.fine(" - tapped document position: $docPosition");
 
-    if (docPosition != null && widget.contentTapHandler != null) {
-      final result = widget.contentTapHandler!.onTripleTap(docPosition);
-      if (result == TapHandlingInstruction.halt) {
-        // The custom tap handler doesn't want us to react at all
-        // to the tap.
-        return;
+    if (widget.contentTapHandlers != null) {
+      for (final handler in widget.contentTapHandlers!) {
+        final result = handler.onTripleTap(
+          DocumentTapDetails(
+            documentLayout: _docLayout,
+            layoutOffset: docOffset,
+            globalOffset: details.globalPosition,
+          ),
+        );
+        if (result == TapHandlingInstruction.halt) {
+          // The custom tap handler doesn't want us to react at all
+          // to the tap.
+          return;
+        }
       }
     }
 
+    final docPosition = _docLayout.getDocumentPositionNearestToOffset(docOffset);
+    editorGesturesLog.fine(" - tapped document position: $docPosition");
     if (docPosition != null) {
       // The user tapped a non-selectable component, so we can't select a paragraph.
       // The editor will remain focused and selection will remain in the nearest
@@ -925,6 +967,7 @@ class _AndroidDocumentTouchInteractorState extends State<AndroidDocumentTouchInt
         ..hideToolbar()
         ..doNotBlinkCaret();
     } else if (!widget.selection.value!.isCollapsed) {
+      // The selection is expanded.
       _controlsController!
         ..hideCollapsedHandle()
         ..showExpandedHandles()
@@ -942,15 +985,29 @@ class _AndroidDocumentTouchInteractorState extends State<AndroidDocumentTouchInt
         ..hideMagnifier()
         ..blinkCaret();
 
-      if (didTapOnExistingSelection) {
+      if (didTapOnExistingSelection && _isKeyboardOpen) {
         // Toggle the toolbar display when the user taps on the collapsed caret,
         // or on top of an existing selection.
+        //
+        // But we only do this when the keyboard is already open. This is because
+        // we don't want to show the toolbar when the user taps simply to open
+        // the keyboard. That would feel unintentional, like a bug.
         _controlsController!.toggleToolbar();
       } else {
         // The user tapped somewhere else in the document. Hide the toolbar.
         _controlsController!.hideToolbar();
       }
     }
+  }
+
+  /// Returns `true` if we *think* the software keyboard is currently open, or
+  /// `false` otherwise.
+  ///
+  /// We say "think" because Flutter doesn't report this info to us. Instead, we
+  /// inspect the bottom insets on the window, and we assume any insets greater than
+  /// zero means a keyboard is visible.
+  bool get _isKeyboardOpen {
+    return MediaQuery.viewInsetsOf(context).bottom > 0;
   }
 
   void _onPanStart(DragStartDetails details) {
@@ -975,23 +1032,29 @@ class _AndroidDocumentTouchInteractorState extends State<AndroidDocumentTouchInt
       return;
     }
 
-    if (widget.selection.value?.isCollapsed == true) {
-      final caretPosition = widget.selection.value!.extent;
-      final tapDocumentOffset = widget.getDocumentLayout().getDocumentOffsetFromAncestorOffset(_globalTapDownOffset!);
-      final tapPosition = widget.getDocumentLayout().getDocumentPositionAtOffset(tapDocumentOffset)!;
-      final isTapOverCaret = caretPosition.isEquivalentTo(tapPosition);
+    final isTapOverCaret = _isOverCaret(_globalTapDownOffset!);
 
-      if (isTapOverCaret) {
-        _onCaretDragPanStart(details);
-        return;
-      }
+    if (isTapOverCaret) {
+      _onCaretDragPanStart(details);
+      return;
+    }
+  }
+
+  bool _isOverCaret(Offset globalOffset) {
+    if (widget.selection.value?.isCollapsed != true) {
+      return false;
     }
 
-    _scrollingDrag = scrollPosition.drag(details, () {
-      // Allows receiving touches while scrolling due to scroll momentum.
-      // This is needed to allow the user to stop scrolling by tapping down.
-      scrollPosition.context.setIgnorePointer(false);
-    });
+    final collapsedPosition = widget.selection.value?.extent;
+    if (collapsedPosition == null) {
+      return false;
+    }
+
+    final extentRect = _docLayout.getRectForPosition(collapsedPosition)!;
+    final caretRect = Rect.fromLTWH(extentRect.left - 1, extentRect.center.dy, 1, 1).inflate(24);
+
+    final tapDocumentOffset = widget.getDocumentLayout().getDocumentOffsetFromAncestorOffset(_globalTapDownOffset!);
+    return caretRect.contains(tapDocumentOffset);
   }
 
   void _onLongPressPanStart(DragStartDetails details) {
@@ -1033,11 +1096,6 @@ class _AndroidDocumentTouchInteractorState extends State<AndroidDocumentTouchInt
       _onCaretDragPanUpdate(details);
       return;
     }
-
-    if (_scrollingDrag != null) {
-      // The user is trying to scroll the document. Change the scroll offset.
-      _scrollingDrag!.update(details);
-    }
   }
 
   void _onLongPressPanUpdate(DragUpdateDetails details) {
@@ -1056,6 +1114,9 @@ class _AndroidDocumentTouchInteractorState extends State<AndroidDocumentTouchInt
     final fingerDocumentPosition = _docLayout.getDocumentPositionNearestToOffset(
       _startDragPositionOffset! + fingerDragDelta - Offset(0, scrollDelta),
     )!;
+    if (fingerDocumentPosition != widget.selection.value!.extent) {
+      HapticFeedback.lightImpact();
+    }
     _selectPosition(fingerDocumentPosition);
   }
 
@@ -1073,7 +1134,7 @@ class _AndroidDocumentTouchInteractorState extends State<AndroidDocumentTouchInt
   void _updateOverlayControlsOnLongPressDrag() {
     final extentDocumentOffset = _docLayout.getRectForPosition(widget.selection.value!.extent)!.center;
     final extentGlobalOffset = _docLayout.getAncestorOffsetFromDocumentOffset(extentDocumentOffset);
-    final extentInteractorOffset = (context.findRenderObject() as RenderBox).globalToLocal(extentGlobalOffset);
+    final extentInteractorOffset = interactorBox.globalToLocal(extentGlobalOffset);
     final extentViewportOffset = _interactorOffsetInViewport(extentInteractorOffset);
     widget.dragHandleAutoScroller.value!.updateAutoScrollHandleMonitoring(dragEndInViewport: extentViewportOffset);
 
@@ -1090,16 +1151,12 @@ class _AndroidDocumentTouchInteractorState extends State<AndroidDocumentTouchInt
       _onCaretDragEnd();
       return;
     }
-
-    if (_scrollingDrag != null) {
-      // The user was performing a drag gesture to scroll the document.
-      // End the scroll activity and let the document scrolling with momentum.
-      _scrollingDrag!.end(details);
-    }
   }
 
   void _onPanCancel() {
-    if (_isLongPressInProgress) {
+    // When _tapDownLongPressTimer is not null we're waiting for either tapUp or tapCancel,
+    // which will deal with the long press.
+    if (_tapDownLongPressTimer == null && _isLongPressInProgress) {
       _onLongPressEnd();
       return;
     }
@@ -1107,12 +1164,6 @@ class _AndroidDocumentTouchInteractorState extends State<AndroidDocumentTouchInt
     if (_isCaretDragInProgress) {
       _onCaretDragEnd();
       return;
-    }
-
-    if (_scrollingDrag != null) {
-      // The user was performing a drag gesture to scroll the document.
-      // End the drag gesture.
-      _scrollingDrag!.cancel();
     }
   }
 
@@ -1226,34 +1277,58 @@ class _AndroidDocumentTouchInteractorState extends State<AndroidDocumentTouchInt
   @override
   Widget build(BuildContext context) {
     final gestureSettings = MediaQuery.maybeOf(context)?.gestureSettings;
-    return RawGestureDetector(
-      behavior: HitTestBehavior.translucent,
-      gestures: <Type, GestureRecognizerFactory>{
-        TapSequenceGestureRecognizer: GestureRecognizerFactoryWithHandlers<TapSequenceGestureRecognizer>(
-          () => TapSequenceGestureRecognizer(),
-          (TapSequenceGestureRecognizer recognizer) {
-            recognizer
-              ..onTapDown = _onTapDown
-              ..onTapUp = _onTapUp
-              ..onDoubleTapDown = _onDoubleTapDown
-              ..onTripleTapDown = _onTripleTapDown
-              ..gestureSettings = gestureSettings;
+    // PanGestureRecognizer is above contents to have first pass at gestures, but it only accepts
+    // gestures that are over caret or handles or when a long press is in progress.
+    // TapGestureRecognizer is below contents so that it doesn't interferes with buttons and other
+    // tappable widgets.
+    return SliverHybridStack(
+      fillViewport: widget.fillViewport,
+      children: [
+        // Layer below
+        RawGestureDetector(
+          behavior: HitTestBehavior.translucent,
+          gestures: <Type, GestureRecognizerFactory>{
+            TapSequenceGestureRecognizer: GestureRecognizerFactoryWithHandlers<TapSequenceGestureRecognizer>(
+              () => TapSequenceGestureRecognizer(),
+              (TapSequenceGestureRecognizer recognizer) {
+                recognizer
+                  ..onTapDown = _onTapDown
+                  ..onTapCancel = _onTapCancel
+                  ..onTapUp = _onTapUp
+                  ..onDoubleTapDown = _onDoubleTapDown
+                  ..onTripleTapDown = _onTripleTapDown
+                  ..gestureSettings = gestureSettings;
+              },
+            ),
           },
         ),
-        VerticalDragGestureRecognizer: GestureRecognizerFactoryWithHandlers<VerticalDragGestureRecognizer>(
-          () => VerticalDragGestureRecognizer(),
-          (VerticalDragGestureRecognizer recognizer) {
-            recognizer
-              ..dragStartBehavior = DragStartBehavior.down
-              ..onStart = _onPanStart
-              ..onUpdate = _onPanUpdate
-              ..onEnd = _onPanEnd
-              ..onCancel = _onPanCancel
-              ..gestureSettings = gestureSettings;
+        widget.child,
+        // Layer above
+        RawGestureDetector(
+          key: _interactor,
+          behavior: HitTestBehavior.translucent,
+          gestures: <Type, GestureRecognizerFactory>{
+            EagerPanGestureRecognizer: GestureRecognizerFactoryWithHandlers<EagerPanGestureRecognizer>(
+              () => EagerPanGestureRecognizer(),
+              (EagerPanGestureRecognizer instance) {
+                instance
+                  ..shouldAccept = () {
+                    if (_globalTapDownOffset == null) {
+                      return false;
+                    }
+                    return _isOverCaret(_globalTapDownOffset!) || _isLongPressInProgress;
+                  }
+                  ..dragStartBehavior = DragStartBehavior.down
+                  ..onStart = _onPanStart
+                  ..onUpdate = _onPanUpdate
+                  ..onEnd = _onPanEnd
+                  ..onCancel = _onPanCancel
+                  ..gestureSettings = gestureSettings;
+              },
+            ),
           },
         ),
-      },
-      child: widget.child,
+      ],
     );
   }
 }
@@ -1315,14 +1390,44 @@ class SuperEditorAndroidControlsOverlayManagerState extends State<SuperEditorAnd
   //
   // The drag handle type varies independently from the drag selection bound.
   HandleType? _dragHandleType;
+  AndroidTextFieldDragHandleSelectionStrategy? _dragHandleSelectionStrategy;
 
   final _dragHandleSelectionGlobalFocalPoint = ValueNotifier<Offset?>(null);
   final _magnifierFocalPoint = ValueNotifier<Offset?>(null);
+
+  late final DocumentHandleGestureDelegate _collapsedHandleGestureDelegate;
+  late final DocumentHandleGestureDelegate _upstreamHandleGesturesDelegate;
+  late final DocumentHandleGestureDelegate _downstreamHandleGesturesDelegate;
 
   @override
   void initState() {
     super.initState();
     _overlayController.show();
+    widget.selection.addListener(_onSelectionChange);
+    _collapsedHandleGestureDelegate = DocumentHandleGestureDelegate(
+      onTap: _toggleToolbarOnCollapsedHandleTap,
+      onPanStart: (details) => _onHandlePanStart(details, HandleType.collapsed),
+      onPanUpdate: _onHandlePanUpdate,
+      onPanEnd: (details) => _onHandlePanEnd(details, HandleType.collapsed),
+    );
+    _upstreamHandleGesturesDelegate = DocumentHandleGestureDelegate(
+      onTap: () {
+        // Register tap down to win gesture arena ASAP.
+      },
+      onPanStart: (details) => _onHandlePanStart(details, HandleType.upstream),
+      onPanUpdate: _onHandlePanUpdate,
+      onPanEnd: (details) => _onHandlePanEnd(details, HandleType.upstream),
+      onPanCancel: () => _onHandlePanCancel(HandleType.upstream),
+    );
+    _downstreamHandleGesturesDelegate = DocumentHandleGestureDelegate(
+      onTap: () {
+        // Register tap down to win gesture arena ASAP.
+      },
+      onPanStart: (details) => _onHandlePanStart(details, HandleType.downstream),
+      onPanUpdate: _onHandlePanUpdate,
+      onPanEnd: (details) => _onHandlePanEnd(details, HandleType.downstream),
+      onPanCancel: () => _onHandlePanCancel(HandleType.downstream),
+    );
   }
 
   @override
@@ -1332,6 +1437,7 @@ class SuperEditorAndroidControlsOverlayManagerState extends State<SuperEditorAnd
     _controlsController = SuperEditorAndroidControlsScope.rootOf(context);
     // TODO: Replace Cupertino aligner with a generic aligner because this code runs on Android.
     _toolbarAligner = CupertinoPopoverToolbarAligner();
+    widget.selection.addListener(_onSelectionChange);
   }
 
   @override
@@ -1345,6 +1451,11 @@ class SuperEditorAndroidControlsOverlayManagerState extends State<SuperEditorAnd
         widget.scrollChangeSignal.addListener(_onDocumentScroll);
       }
     }
+
+    if (widget.selection != oldWidget.selection) {
+      oldWidget.selection.removeListener(_onSelectionChange);
+      widget.selection.addListener(_onSelectionChange);
+    }
   }
 
   @override
@@ -1353,6 +1464,7 @@ class SuperEditorAndroidControlsOverlayManagerState extends State<SuperEditorAnd
     // stop listening for document scroll changes.
     widget.dragHandleAutoScroller.value?.stopAutoScrollHandleMonitoring();
     widget.scrollChangeSignal.removeListener(_onDocumentScroll);
+    widget.selection.removeListener(_onSelectionChange);
 
     super.dispose();
   }
@@ -1363,16 +1475,66 @@ class SuperEditorAndroidControlsOverlayManagerState extends State<SuperEditorAnd
   @visibleForTesting
   bool get wantsToDisplayMagnifier => _controlsController!.shouldShowMagnifier.value;
 
+  /// Returns the `RenderBox` for the scrolling viewport.
+  ///
+  /// If this widget has an ancestor `Scrollable`, then the returned
+  /// `RenderBox` belongs to that ancestor `Scrollable`.
+  ///
+  /// If this widget doesn't have an ancestor `Scrollable`, then this
+  /// widget includes a `ScrollView` and this `State`'s render object
+  /// is the viewport `RenderBox`.
+  RenderBox get viewportBox =>
+      (context.findAncestorScrollableWithVerticalScroll?.context.findRenderObject() ?? context.findRenderObject())
+          as RenderBox;
+
+  void _onSelectionChange() {
+    final selection = widget.selection.value;
+    if (selection == null) {
+      return;
+    }
+
+    if (selection.isCollapsed &&
+        _controlsController!.shouldShowExpandedHandles.value == true &&
+        _dragHandleType == null) {
+      // The selection is collapsed, but the expanded handles are visible and the user isn't dragging a handle.
+      // This can happen when the selection is expanded, and the user deletes the selected text. The only situation
+      // where the expanded handles should be visible when the selection is collapsed is when the selection
+      // collapses while the user is dragging an expanded handle, which isn't the case here. Hide the handles.
+      _controlsController!
+        ..hideCollapsedHandle()
+        ..hideExpandedHandles()
+        ..hideMagnifier()
+        ..hideToolbar()
+        ..blinkCaret();
+    }
+
+    if (!selection.isCollapsed && _controlsController!.shouldShowCollapsedHandle.value == true) {
+      // The selection is expanded, but the collapsed handle is visible. This can happen when the
+      // selection is collapsed and the user taps the "Select All" button. There isn't any situation
+      // where the collapsed handle should be visible when the selection is expanded. Hide the collapsed
+      // handle and show the expanded handles.
+      _controlsController!
+        ..hideCollapsedHandle()
+        ..showExpandedHandles()
+        ..hideMagnifier();
+    }
+  }
+
+  void _toggleToolbarOnCollapsedHandleTap() {
+    _controlsController!.toggleToolbar();
+  }
+
+  void _updateDragHandleSelection(DocumentSelection newSelection) {
+    if (newSelection != widget.selection.value) {
+      widget.setSelection(newSelection);
+      HapticFeedback.lightImpact();
+    }
+  }
+
   void _onHandlePanStart(DragStartDetails details, HandleType handleType) {
     final selection = widget.selection.value;
     if (selection == null) {
       throw Exception("Tried to drag a collapsed Android handle when there's no selection.");
-    }
-    if (handleType == HandleType.collapsed && !selection.isCollapsed) {
-      throw Exception("Tried to drag a collapsed Android handle but the selection is expanded.");
-    }
-    if (handleType != HandleType.collapsed && selection.isCollapsed) {
-      throw Exception("Tried to drag an expanded Android handle but the selection is collapsed.");
     }
 
     final isSelectionDownstream = widget.selection.value!.hasDownstreamAffinity(widget.document);
@@ -1393,9 +1555,13 @@ class SuperEditorAndroidControlsOverlayManagerState extends State<SuperEditorAnd
       documentLayout.getRectForPosition(selectionBoundPosition)!.center,
     );
     _dragHandleSelectionGlobalFocalPoint.value = centerOfContentAtOffset;
+    _magnifierFocalPoint.value = centerOfContentAtOffset;
 
-    final myBox = context.findRenderObject() as RenderBox;
-    _magnifierFocalPoint.value = myBox.globalToLocal(centerOfContentAtOffset);
+    _dragHandleSelectionStrategy = AndroidTextFieldDragHandleSelectionStrategy(
+      document: widget.document,
+      documentLayout: widget.getDocumentLayout(),
+      select: _updateDragHandleSelection,
+    )..onHandlePanStart(details, selection, handleType);
 
     // Update the controls for handle dragging.
     _controlsController!
@@ -1421,20 +1587,24 @@ class SuperEditorAndroidControlsOverlayManagerState extends State<SuperEditorAnd
     // Move the selection focal point by the given delta.
     _dragHandleSelectionGlobalFocalPoint.value = _dragHandleSelectionGlobalFocalPoint.value! + details.delta;
 
-    // Update the selection and magnifier based on the latest drag handle offset.
-    _moveSelectionAndMagnifierToDragHandleOffset(dragDx: details.delta.dx);
+    _dragHandleSelectionStrategy!.onHandlePanUpdate(details);
+
+    // Update the magnifier based on the latest drag handle offset.
+    _moveMagnifierToDragHandleOffset(dragDx: details.delta.dx);
   }
 
-  void _onHandlePanEnd(DragEndDetails details) {
-    _onHandleDragEnd();
+  void _onHandlePanEnd(DragEndDetails details, HandleType handleType) {
+    _dragHandleSelectionStrategy = null;
+    _onHandleDragEnd(handleType);
   }
 
-  void _onHandlePanCancel() {
-    _onHandleDragEnd();
+  void _onHandlePanCancel(HandleType handleType) {
+    _dragHandleSelectionStrategy = null;
+    _onHandleDragEnd(handleType);
   }
 
-  void _onHandleDragEnd() {
-    _dragHandleSelectionBound = null;
+  void _onHandleDragEnd(HandleType handleType) {
+    _dragHandleSelectionStrategy = null;
     _dragHandleType = null;
     _dragHandleSelectionGlobalFocalPoint.value = null;
     _magnifierFocalPoint.value = null;
@@ -1443,6 +1613,16 @@ class SuperEditorAndroidControlsOverlayManagerState extends State<SuperEditorAnd
     _controlsController!
       ..blinkCaret()
       ..hideMagnifier();
+
+    if (widget.selection.value?.isCollapsed == true &&
+        const [HandleType.upstream, HandleType.downstream].contains(handleType)) {
+      // The user dragged an expanded handle until the selection collapsed and then released the handle.
+      // While the user was dragging, the expanded handles were displayed.
+      // Show the collapsed.
+      _controlsController!
+        ..hideExpandedHandles()
+        ..showCollapsedHandle();
+    }
 
     // Stop auto-scrolling based on the drag-handle offset.
     widget.dragHandleAutoScroller.value?.stopAutoScrollHandleMonitoring();
@@ -1471,24 +1651,43 @@ class SuperEditorAndroidControlsOverlayManagerState extends State<SuperEditorAnd
   void _moveSelectionAndMagnifierToDragHandleOffset({
     double dragDx = 0,
   }) {
+    _moveSelectionToDragHandleOffset();
+    _moveMagnifierToDragHandleOffset(dragDx: dragDx);
+  }
+
+  void _moveMagnifierToDragHandleOffset({
+    double dragDx = 0,
+  }) {
     // Move the selection to the document position that's nearest the focal point.
     final documentLayout = widget.getDocumentLayout();
     final nearestPosition = documentLayout.getDocumentPositionNearestToOffset(
       documentLayout.getDocumentOffsetFromAncestorOffset(_dragHandleSelectionGlobalFocalPoint.value!),
     )!;
 
+    final centerOfContentInContentSpace = documentLayout.getRectForPosition(nearestPosition)!.center;
+
     // Move the magnifier focal point to match the drag x-offset, but always remain focused on the vertical
     // center of the line.
-    final myBox = context.findRenderObject() as RenderBox;
-    final centerOfContentAtNearestPosition = documentLayout.getAncestorOffsetFromDocumentOffset(
-      documentLayout.getRectForPosition(nearestPosition)!.center,
+    final centerOfContentAtNearestPosition =
+        documentLayout.getAncestorOffsetFromDocumentOffset(centerOfContentInContentSpace);
+    _magnifierFocalPoint.value = Offset(
+      _magnifierFocalPoint.value!.dx + dragDx,
+      centerOfContentAtNearestPosition.dy,
     );
-    _magnifierFocalPoint.value = myBox.globalToLocal(
-      Offset(
-        _magnifierFocalPoint.value!.dx + dragDx,
-        centerOfContentAtNearestPosition.dy,
-      ),
+
+    // Update the auto-scroll focal point so that the viewport scrolls if we're
+    // close to the boundary.
+    widget.dragHandleAutoScroller.value?.updateAutoScrollHandleMonitoring(
+      dragEndInViewport: _contentOffsetInViewport(centerOfContentInContentSpace),
     );
+  }
+
+  void _moveSelectionToDragHandleOffset() {
+    // Move the selection to the document position that's nearest the focal point.
+    final documentLayout = widget.getDocumentLayout();
+    final nearestPosition = documentLayout.getDocumentPositionNearestToOffset(
+      documentLayout.getDocumentOffsetFromAncestorOffset(_dragHandleSelectionGlobalFocalPoint.value!),
+    )!;
 
     switch (_dragHandleType!) {
       case HandleType.collapsed:
@@ -1510,20 +1709,26 @@ class SuperEditorAndroidControlsOverlayManagerState extends State<SuperEditorAnd
             ));
         }
     }
+  }
 
-    // Update the auto-scroll focal point so that the viewport scrolls if we're
-    // close to the boundary.
-    widget.dragHandleAutoScroller.value?.updateAutoScrollHandleMonitoring(
-      dragEndInViewport: centerOfContentAtNearestPosition,
-    );
+  /// Converts the [offset] in content space to an offset in the viewport space.
+  Offset _contentOffsetInViewport(Offset offset) {
+    final documentLayout = widget.getDocumentLayout();
+    final globalOffset = documentLayout.getGlobalOffsetFromDocumentOffset(offset);
+    return viewportBox.globalToLocal(globalOffset);
   }
 
   @override
   Widget build(BuildContext context) {
-    return OverlayPortal(
-      controller: _overlayController,
-      overlayChildBuilder: _buildOverlay,
-      child: widget.child ?? const SizedBox(),
+    return SliverHybridStack(
+      children: [
+        widget.child!,
+        OverlayPortal(
+          controller: _overlayController,
+          overlayChildBuilder: _buildOverlay,
+          child: const SizedBox(),
+        ),
+      ],
     );
   }
 
@@ -1557,12 +1762,26 @@ class SuperEditorAndroidControlsOverlayManagerState extends State<SuperEditorAnd
           return const SizedBox();
         }
 
+        if (_controlsController!.collapsedHandleBuilder != null) {
+          return _controlsController!.collapsedHandleBuilder!(
+            context,
+            handleKey: DocumentKeys.androidCaretHandle,
+            focalPoint: _controlsController!.collapsedHandleFocalPoint,
+            shouldShow: shouldShow,
+            gestureDelegate: _collapsedHandleGestureDelegate,
+          );
+        }
+
         // Note: If we pass this widget as the `child` property, it causes repeated starts and stops
         // of the pan gesture. By building it here, pan events work as expected.
         return Follower.withOffset(
           link: _controlsController!.collapsedHandleFocalPoint,
           leaderAnchor: Alignment.bottomCenter,
           followerAnchor: Alignment.topCenter,
+          showWhenUnlinked: false,
+          // Use the offset to account for the invisible expanded touch region around the handle.
+          offset: -Offset(0, AndroidSelectionHandle.defaultTouchRegionExpansion.top) *
+              MediaQuery.devicePixelRatioOf(context),
           child: AnimatedOpacity(
             // When the controller doesn't want the handle to be visible, hide it.
             opacity: shouldShow ? 1.0 : 0.0,
@@ -1578,10 +1797,11 @@ class SuperEditorAndroidControlsOverlayManagerState extends State<SuperEditorAnd
                 onTapDown: (_) {
                   // Register tap down to win gesture arena ASAP.
                 },
-                onPanStart: (details) => _onHandlePanStart(details, HandleType.collapsed),
-                onPanUpdate: _onHandlePanUpdate,
-                onPanEnd: _onHandlePanEnd,
-                onPanCancel: _onHandlePanCancel,
+                onTap: _collapsedHandleGestureDelegate.onTap,
+                onPanStart: _collapsedHandleGestureDelegate.onPanStart,
+                onPanUpdate: _collapsedHandleGestureDelegate.onPanUpdate,
+                onPanEnd: _collapsedHandleGestureDelegate.onPanEnd,
+                onPanCancel: _collapsedHandleGestureDelegate.onPanCancel,
                 dragStartBehavior: DragStartBehavior.down,
                 child: AndroidSelectionHandle(
                   key: DocumentKeys.androidCaretHandle,
@@ -1597,6 +1817,26 @@ class SuperEditorAndroidControlsOverlayManagerState extends State<SuperEditorAnd
   }
 
   List<Widget> _buildExpandedHandles() {
+    if (_controlsController!.expandedHandlesBuilder != null) {
+      return [
+        ValueListenableBuilder(
+          valueListenable: _controlsController!.shouldShowExpandedHandles,
+          builder: (context, shouldShow, child) {
+            return _controlsController!.expandedHandlesBuilder!(
+              context,
+              upstreamHandleKey: DocumentKeys.upstreamHandle,
+              upstreamFocalPoint: _controlsController!.upstreamHandleFocalPoint,
+              upstreamGestureDelegate: _upstreamHandleGesturesDelegate,
+              downstreamHandleKey: DocumentKeys.downstreamHandle,
+              downstreamFocalPoint: _controlsController!.downstreamHandleFocalPoint,
+              downstreamGestureDelegate: _downstreamHandleGesturesDelegate,
+              shouldShow: shouldShow,
+            );
+          },
+        )
+      ];
+    }
+
     return [
       ValueListenableBuilder(
         valueListenable: _controlsController!.shouldShowExpandedHandles,
@@ -1609,14 +1849,16 @@ class SuperEditorAndroidControlsOverlayManagerState extends State<SuperEditorAnd
             link: _controlsController!.upstreamHandleFocalPoint,
             leaderAnchor: Alignment.bottomLeft,
             followerAnchor: Alignment.topRight,
+            showWhenUnlinked: false,
+            // Use the offset to account for the invisible expanded touch region around the handle.
+            offset:
+                -AndroidSelectionHandle.defaultTouchRegionExpansion.topRight * MediaQuery.devicePixelRatioOf(context),
             child: GestureDetector(
-              onTapDown: (_) {
-                // Register tap down to win gesture arena ASAP.
-              },
-              onPanStart: (details) => _onHandlePanStart(details, HandleType.upstream),
-              onPanUpdate: _onHandlePanUpdate,
-              onPanEnd: _onHandlePanEnd,
-              onPanCancel: _onHandlePanCancel,
+              onTapDown: _upstreamHandleGesturesDelegate.onTapDown,
+              onPanStart: _upstreamHandleGesturesDelegate.onPanStart,
+              onPanUpdate: _upstreamHandleGesturesDelegate.onPanUpdate,
+              onPanEnd: _upstreamHandleGesturesDelegate.onPanEnd,
+              onPanCancel: _upstreamHandleGesturesDelegate.onPanCancel,
               dragStartBehavior: DragStartBehavior.down,
               child: AndroidSelectionHandle(
                 key: DocumentKeys.upstreamHandle,
@@ -1638,14 +1880,16 @@ class SuperEditorAndroidControlsOverlayManagerState extends State<SuperEditorAnd
             link: _controlsController!.downstreamHandleFocalPoint,
             leaderAnchor: Alignment.bottomRight,
             followerAnchor: Alignment.topLeft,
+            showWhenUnlinked: false,
+            // Use the offset to account for the invisible expanded touch region around the handle.
+            offset:
+                -AndroidSelectionHandle.defaultTouchRegionExpansion.topLeft * MediaQuery.devicePixelRatioOf(context),
             child: GestureDetector(
-              onTapDown: (_) {
-                // Register tap down to win gesture arena ASAP.
-              },
-              onPanStart: (details) => _onHandlePanStart(details, HandleType.downstream),
-              onPanUpdate: _onHandlePanUpdate,
-              onPanEnd: _onHandlePanEnd,
-              onPanCancel: _onHandlePanCancel,
+              onTapDown: _downstreamHandleGesturesDelegate.onTapDown,
+              onPanStart: _downstreamHandleGesturesDelegate.onPanStart,
+              onPanUpdate: _downstreamHandleGesturesDelegate.onPanUpdate,
+              onPanEnd: _downstreamHandleGesturesDelegate.onPanEnd,
+              onPanCancel: _downstreamHandleGesturesDelegate.onPanCancel,
               dragStartBehavior: DragStartBehavior.down,
               child: AndroidSelectionHandle(
                 key: DocumentKeys.downstreamHandle,
@@ -1708,44 +1952,42 @@ class SuperEditorAndroidControlsOverlayManagerState extends State<SuperEditorAnd
     return ValueListenableBuilder(
       valueListenable: _controlsController!.shouldShowMagnifier,
       builder: (context, shouldShow, child) {
-        return shouldShow ? child! : const SizedBox();
+        return _controlsController!.magnifierBuilder != null //
+            ? _controlsController!.magnifierBuilder!(
+                context,
+                DocumentKeys.magnifier,
+                _controlsController!.magnifierFocalPoint,
+                shouldShow,
+              )
+            : _buildDefaultMagnifier(
+                context,
+                DocumentKeys.magnifier,
+                _controlsController!.magnifierFocalPoint,
+                shouldShow,
+              );
       },
-      child: _controlsController!.magnifierBuilder != null //
-          ? _controlsController!.magnifierBuilder!(
-              context,
-              DocumentKeys.magnifier,
-              _controlsController!.magnifierFocalPoint,
-            )
-          : _buildDefaultMagnifier(
-              context,
-              DocumentKeys.magnifier,
-              _controlsController!.magnifierFocalPoint,
-            ),
     );
   }
 
-  Widget _buildDefaultMagnifier(BuildContext context, Key magnifierKey, LeaderLink focalPoint) {
+  Widget _buildDefaultMagnifier(BuildContext context, Key magnifierKey, LeaderLink focalPoint, bool isVisible) {
+    if (!isVisible) {
+      return const SizedBox();
+    }
+
+    final devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
     return Follower.withOffset(
       link: _controlsController!.magnifierFocalPoint,
-      offset: const Offset(0, -150),
+      offset: Offset(0, -54 * devicePixelRatio),
       leaderAnchor: Alignment.center,
-      followerAnchor: Alignment.topLeft,
-      // Theoretically, we should be able to use a leaderAnchor and followerAnchor of "center"
-      // and avoid the following FractionalTranslation. However, when centering the follower,
-      // we don't get the expect focal point within the magnified area. It's off-center. I'm not
-      // sure why that happens, but using a followerAnchor of "topLeft" and then pulling back
-      // by 50% solve the problem.
-      child: FractionalTranslation(
-        translation: const Offset(-0.5, -0.5),
-        child: AndroidMagnifyingGlass(
-          key: magnifierKey,
-          magnificationScale: 1.5,
-          // In theory, the offsetFromFocalPoint should either be `-150` to match the actual
-          // offset, or it should be `-150 / magnificationLevel`. Neither of those align the
-          // focal point correctly. The following offset was found empirically to give the
-          // desired results, no matter how high the magnification.
-          offsetFromFocalPoint: const Offset(0, -58),
-        ),
+      followerAnchor: Alignment.center,
+      boundary: ScreenFollowerBoundary(
+        screenSize: MediaQuery.sizeOf(context),
+        devicePixelRatio: MediaQuery.devicePixelRatioOf(context),
+      ),
+      child: AndroidMagnifyingGlass(
+        key: magnifierKey,
+        magnificationScale: 1.5,
+        offsetFromFocalPoint: const Offset(0, -54),
       ),
     );
   }

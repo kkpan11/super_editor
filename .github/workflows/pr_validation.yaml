@@ -122,7 +122,70 @@ jobs:
       # Run all tests
       - run: flutter test
 
-  test_super_text_layout:
+  test_super_editor_quill:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./super_editor_quill
+    steps:
+      # Checkout the PR branch
+      - uses: actions/checkout@v3
+
+      # Setup Flutter environment
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: "master"
+
+      # Download all the packages that the app uses
+      - run: flutter pub get
+
+      # TODO: Enforce static analysis
+
+      # Run all tests
+      - run: flutter test
+
+  analyze_super_keyboard:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./super_keyboard
+    steps:
+      # Checkout the PR branch
+      - uses: actions/checkout@v3
+
+      # Setup Flutter environment
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: "master"
+
+      # Download all the packages that the app uses
+      - run: flutter pub get
+
+      # Enforce static analysis
+      - run: flutter analyze
+
+  test_super_keyboard:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./super_keyboard
+    steps:
+      # Checkout the PR branch
+      - uses: actions/checkout@v3
+
+      # Setup Flutter environment
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: "master"
+
+      # Download all the packages that the app uses
+      - run: flutter pub get
+
+      # Run all tests
+      - run: flutter test
+
+
+  analyze_super_text_layout:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -141,6 +204,23 @@ jobs:
 
       # Enforce static analysis
       - run: flutter analyze
+
+  test_super_text_layout:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./super_text_layout
+    steps:
+      # Checkout the PR branch
+      - uses: actions/checkout@v3
+
+      # Setup Flutter environment
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: "master"
+
+      # Download all the packages that the app uses
+      - run: flutter pub get
 
       # Run all tests
       - run: flutter test
@@ -174,7 +254,7 @@ jobs:
           name: golden-failures
           path: "**/failures/**/*.png"
 
-  test_attributed_text:
+  analyze_attributed_text:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -191,6 +271,21 @@ jobs:
 
       # Enforce static analysis
       - run: dart analyze
+
+  test_attributed_text:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./attributed_text
+    steps:
+      # Checkout the PR branch
+      - uses: actions/checkout@v3
+
+      # Setup Dart
+      - uses: dart-lang/setup-dart@v1
+
+      # Install app dependencies
+      - run: dart pub get
 
       # Run all tests
       - run: dart test

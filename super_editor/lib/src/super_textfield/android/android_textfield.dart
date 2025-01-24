@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:follow_the_leader/follow_the_leader.dart';
 import 'package:super_editor/src/infrastructure/attributed_text_styles.dart';
 import 'package:super_editor/src/infrastructure/flutter/build_context.dart';
 import 'package:super_editor/src/infrastructure/flutter/flutter_scheduler.dart';
 import 'package:super_editor/src/infrastructure/flutter/text_input_configuration.dart';
-import 'package:super_editor/src/infrastructure/focus.dart';
 import 'package:super_editor/src/infrastructure/ime_input_owner.dart';
 import 'package:super_editor/src/infrastructure/platforms/android/toolbar.dart';
 import 'package:super_editor/src/infrastructure/signal_notifier.dart';
@@ -13,6 +13,7 @@ import 'package:super_editor/src/super_textfield/android/_editing_controls.dart'
 import 'package:super_editor/src/super_textfield/android/_user_interaction.dart';
 import 'package:super_editor/src/super_textfield/infrastructure/fill_width_if_constrained.dart';
 import 'package:super_editor/src/super_textfield/infrastructure/hint_text.dart';
+import 'package:super_editor/src/super_textfield/infrastructure/text_field_gestures_interaction_overrides.dart';
 import 'package:super_editor/src/super_textfield/infrastructure/text_scrollview.dart';
 import 'package:super_editor/src/super_textfield/input_method_engine/_ime_text_editing_controller.dart';
 import 'package:super_text_layout/super_text_layout.dart';
@@ -45,6 +46,7 @@ class SuperAndroidTextField extends StatefulWidget {
     this.textInputAction,
     this.imeConfiguration,
     this.showComposingUnderline = true,
+    this.tapHandlers = const [],
     this.popoverToolbarBuilder = _defaultAndroidToolbarBuilder,
     this.showDebugPaint = false,
     this.padding,
@@ -140,6 +142,9 @@ class SuperAndroidTextField extends StatefulWidget {
   /// Whether to show an underline beneath the text in the composing region.
   final bool showComposingUnderline;
 
+  /// {@macro super_text_field_tap_handlers}
+  final List<SuperTextFieldTapHandler> tapHandlers;
+
   /// Whether to paint debug guides.
   final bool showDebugPaint;
 
@@ -170,7 +175,7 @@ class SuperAndroidTextFieldState extends State<SuperAndroidTextField>
 
   late ImeAttributedTextEditingController _textEditingController;
 
-  final _magnifierLayerLink = LayerLink();
+  final _magnifierLayerLink = LeaderLink();
   late AndroidEditingOverlayController _editingOverlayController;
 
   late TextScrollController _textScrollController;
@@ -179,12 +184,22 @@ class SuperAndroidTextFieldState extends State<SuperAndroidTextField>
   // positions the invisible touch targets for base/extent dragging.
   final _popoverController = OverlayPortalController();
 
+  late final BlinkController _caretBlinkController;
+
   /// Notifies the popover toolbar to rebuild itself.
   final _popoverRebuildSignal = SignalNotifier();
 
   @override
   void initState() {
     super.initState();
+
+    switch (widget.blinkTimingMode) {
+      case BlinkTimingMode.ticker:
+        _caretBlinkController = BlinkController(tickerProvider: this);
+      case BlinkTimingMode.timer:
+        _caretBlinkController = BlinkController.withTimer();
+    }
+
     _focusNode = (widget.focusNode ?? FocusNode())..addListener(_updateSelectionAndImeConnectionOnFocusChange);
 
     _textEditingController = (widget.textController ?? ImeAttributedTextEditingController())
@@ -198,6 +213,7 @@ class SuperAndroidTextFieldState extends State<SuperAndroidTextField>
 
     _editingOverlayController = AndroidEditingOverlayController(
       textController: _textEditingController,
+      caretBlinkController: _caretBlinkController,
       magnifierFocalPoint: _magnifierLayerLink,
     );
 
@@ -310,6 +326,8 @@ class SuperAndroidTextFieldState extends State<SuperAndroidTextField>
       ..removeListener(_onTextScrollChange)
       ..dispose();
 
+    _caretBlinkController.dispose();
+
     _popoverRebuildSignal.dispose();
 
     WidgetsBinding.instance.removeObserver(this);
@@ -330,8 +348,19 @@ class SuperAndroidTextFieldState extends State<SuperAndroidTextField>
     });
   }
 
+  @visibleForTesting
+  TextScrollController get scrollController => _textScrollController;
+
   @override
   ProseTextLayout get textLayout => _textContentKey.currentState!.textLayout;
+
+  /// Calculates and returns the `Offset` from the top-left corner of this text field
+  /// to the top-left corner of the [textLayout] within this text field.
+  Offset get textLayoutOffsetInField {
+    final fieldBox = context.findRenderObject() as RenderBox;
+    final textLayoutBox = _textContentKey.currentContext!.findRenderObject() as RenderBox;
+    return textLayoutBox.localToGlobal(Offset.zero, ancestor: fieldBox);
+  }
 
   @visibleForTesting
   bool get isCollapsedHandleVisible =>
@@ -359,35 +388,44 @@ class SuperAndroidTextFieldState extends State<SuperAndroidTextField>
   bool get _isMultiline => (widget.minLines ?? 1) != 1 || widget.maxLines != 1;
 
   void _updateSelectionAndImeConnectionOnFocusChange() {
-    if (_focusNode.hasFocus) {
-      if (!_textEditingController.isAttachedToIme) {
-        _log.info('Attaching TextInputClient to TextInput');
+    // The focus change callback might be invoked in the build phase, usually when used inside
+    // an OverlayPortal. If that's the case, defer the setState call until the end of the frame.
+    WidgetsBinding.instance.runAsSoonAsPossible(() {
+      if (!mounted) {
+        return;
+      }
+
+      if (_focusNode.hasFocus) {
+        if (!_textEditingController.isAttachedToIme) {
+          _log.info('Attaching TextInputClient to TextInput');
+          setState(() {
+            if (!_textEditingController.selection.isValid) {
+              _textEditingController.selection = TextSelection.collapsed(offset: _textEditingController.text.length);
+            }
+
+            if (widget.imeConfiguration != null) {
+              _textEditingController.attachToImeWithConfig(widget.imeConfiguration!);
+            } else {
+              _textEditingController.attachToIme(
+                textInputAction: widget.textInputAction ?? TextInputAction.done,
+                textInputType: _isMultiline ? TextInputType.multiline : TextInputType.text,
+              );
+            }
+
+            _autoScrollToKeepTextFieldVisible();
+            _showEditingControlsOverlay();
+          });
+        }
+      } else {
+        _log.info('Lost focus. Detaching TextInputClient from TextInput.');
         setState(() {
-          if (!_textEditingController.selection.isValid) {
-            _textEditingController.selection = TextSelection.collapsed(offset: _textEditingController.text.text.length);
-          }
-
-          if (widget.imeConfiguration != null) {
-            _textEditingController.attachToImeWithConfig(widget.imeConfiguration!);
-          } else {
-            _textEditingController.attachToIme(
-              textInputAction: widget.textInputAction ?? TextInputAction.done,
-              textInputType: _isMultiline ? TextInputType.multiline : TextInputType.text,
-            );
-          }
-
-          _autoScrollToKeepTextFieldVisible();
-          _showEditingControlsOverlay();
+          _textEditingController.detachFromIme();
+          _textEditingController.selection = const TextSelection.collapsed(offset: -1);
+          _textEditingController.composingRegion = TextRange.empty;
+          _removeEditingOverlayControls();
         });
       }
-    } else {
-      _log.info('Lost focus. Detaching TextInputClient from TextInput.');
-      setState(() {
-        _textEditingController.detachFromIme();
-        _textEditingController.selection = const TextSelection.collapsed(offset: -1);
-        _removeEditingOverlayControls();
-      });
-    }
+    });
   }
 
   void _onTextOrSelectionChange() {
@@ -515,7 +553,7 @@ class SuperAndroidTextFieldState extends State<SuperAndroidTextField>
   Widget _buildTextField() {
     return TapRegion(
       groupId: widget.tapRegionGroupId,
-      child: NonReparentingFocus(
+      child: Focus(
         key: _textFieldKey,
         focusNode: _focusNode,
         onKeyEvent: _onKeyEventPressed,
@@ -523,6 +561,7 @@ class SuperAndroidTextFieldState extends State<SuperAndroidTextField>
           link: _textFieldLayerLink,
           child: AndroidTextFieldTouchInteractor(
             focusNode: _focusNode,
+            tapHandlers: widget.tapHandlers,
             textKey: _textContentKey,
             getGlobalCaretRect: _getGlobalCaretRect,
             textFieldLayerLink: _textFieldLayerLink,
@@ -541,29 +580,22 @@ class SuperAndroidTextFieldState extends State<SuperAndroidTextField>
               minLines: widget.minLines,
               maxLines: widget.maxLines,
               lineHeight: widget.lineHeight,
+              padding: EdgeInsets.only(top: widget.padding?.top ?? 0, bottom: widget.padding?.bottom ?? 0),
               perLineAutoScrollDuration: const Duration(milliseconds: 100),
               showDebugPaint: widget.showDebugPaint,
-              padding: widget.padding,
-              child: ListenableBuilder(
-                listenable: _textEditingController,
-                builder: (context, _) {
-                  final isTextEmpty = _textEditingController.text.text.isEmpty;
-                  final showHint = widget.hintBuilder != null &&
-                      ((isTextEmpty && widget.hintBehavior == HintBehavior.displayHintUntilTextEntered) ||
-                          (isTextEmpty &&
-                              !_focusNode.hasFocus &&
-                              widget.hintBehavior == HintBehavior.displayHintUntilFocus));
-
-                  return CompositedTransformTarget(
+              child: FillWidthIfConstrained(
+                child: Padding(
+                  padding: EdgeInsets.only(left: widget.padding?.left ?? 0, right: widget.padding?.right ?? 0),
+                  child: CompositedTransformTarget(
                     link: _textContentLayerLink,
-                    child: Stack(
-                      children: [
-                        if (showHint) widget.hintBuilder!(context),
-                        _buildSelectableText(),
-                      ],
+                    child: ListenableBuilder(
+                      listenable: _textEditingController,
+                      builder: (context, _) {
+                        return _buildSelectableText();
+                      },
                     ),
-                  );
-                },
+                  ),
+                ),
               ),
             ),
           ),
@@ -573,60 +605,65 @@ class SuperAndroidTextFieldState extends State<SuperAndroidTextField>
   }
 
   Widget _buildSelectableText() {
-    final textSpan = _textEditingController.text.text.isNotEmpty
+    final textSpan = _textEditingController.text.isNotEmpty
         ? _textEditingController.text.computeTextSpan(widget.textStyleBuilder)
         : TextSpan(text: "", style: widget.textStyleBuilder({}));
 
-    return FillWidthIfConstrained(
-      child: SuperText(
-        key: _textContentKey,
-        richText: textSpan,
-        textAlign: widget.textAlign,
-        textScaler: MediaQuery.textScalerOf(context),
-        layerBeneathBuilder: (context, textLayout) {
-          return Stack(
-            children: [
-              if (widget.textController?.selection.isValid == true)
-                // Selection highlight beneath the text.
-                TextLayoutSelectionHighlight(
-                  textLayout: textLayout,
-                  style: SelectionHighlightStyle(
-                    color: widget.selectionColor,
-                  ),
-                  selection: widget.textController?.selection,
-                ),
-              // Underline beneath the composing region.
-              if (widget.textController?.composingRegion.isValid == true && widget.showComposingUnderline)
-                TextUnderlineLayer(
-                  textLayout: textLayout,
-                  underlines: [
-                    TextLayoutUnderline(
-                      style: UnderlineStyle(
-                        color: widget.textStyleBuilder({}).color ?? //
-                            (Theme.of(context).brightness == Brightness.light ? Colors.black : Colors.white),
-                      ),
-                      range: widget.textController!.composingRegion,
-                    ),
-                  ],
-                ),
-            ],
-          );
-        },
-        layerAboveBuilder: (context, textLayout) {
-          if (!_focusNode.hasFocus) {
-            return const SizedBox();
-          }
+    return SuperText(
+      key: _textContentKey,
+      richText: textSpan,
+      textAlign: widget.textAlign,
+      textScaler: MediaQuery.textScalerOf(context),
+      layerBeneathBuilder: (context, textLayout) {
+        final isTextEmpty = _textEditingController.text.isEmpty;
+        final showHint = widget.hintBuilder != null &&
+            ((isTextEmpty && widget.hintBehavior == HintBehavior.displayHintUntilTextEntered) ||
+                (isTextEmpty && !_focusNode.hasFocus && widget.hintBehavior == HintBehavior.displayHintUntilFocus));
 
-          return TextLayoutCaret(
-            textLayout: textLayout,
-            style: widget.caretStyle,
-            position: _textEditingController.selection.isCollapsed //
-                ? _textEditingController.selection.extent
-                : null,
-            blinkTimingMode: widget.blinkTimingMode,
-          );
-        },
-      ),
+        return Stack(
+          children: [
+            if (widget.textController?.selection.isValid == true)
+              // Selection highlight beneath the text.
+              TextLayoutSelectionHighlight(
+                textLayout: textLayout,
+                style: SelectionHighlightStyle(
+                  color: widget.selectionColor,
+                ),
+                selection: widget.textController?.selection,
+              ),
+            // Underline beneath the composing region.
+            if (widget.textController?.composingRegion.isValid == true && widget.showComposingUnderline)
+              TextUnderlineLayer(
+                textLayout: textLayout,
+                style: StraightUnderlineStyle(
+                  color: widget.textStyleBuilder({}).color ?? //
+                      (Theme.of(context).brightness == Brightness.light ? Colors.black : Colors.white),
+                ),
+                underlines: [
+                  TextLayoutUnderline(
+                    range: widget.textController!.composingRegion,
+                  ),
+                ],
+              ),
+            if (showHint) //
+              widget.hintBuilder!(context),
+          ],
+        );
+      },
+      layerAboveBuilder: (context, textLayout) {
+        if (!_focusNode.hasFocus) {
+          return const SizedBox();
+        }
+
+        return TextLayoutCaret(
+          textLayout: textLayout,
+          style: widget.caretStyle,
+          position: _textEditingController.selection.isCollapsed //
+              ? _textEditingController.selection.extent
+              : null,
+          blinkController: _caretBlinkController,
+        );
+      },
     );
   }
 
@@ -656,44 +693,58 @@ Widget _defaultAndroidToolbarBuilder(
   AndroidEditingOverlayController controller,
   ToolbarConfig config,
 ) {
+  final isSelectionExpanded = !controller.textController.selection.isCollapsed;
+
   return AndroidTextEditingFloatingToolbar(
-    onCutPressed: () {
-      final textController = controller.textController;
-
-      final selection = textController.selection;
-      if (selection.isCollapsed) {
-        return;
-      }
-
-      final selectedText = selection.textInside(textController.text.text);
-
-      textController.deleteSelectedText();
-
-      Clipboard.setData(ClipboardData(text: selectedText));
-    },
-    onCopyPressed: () {
-      final textController = controller.textController;
-      final selection = textController.selection;
-      final selectedText = selection.textInside(textController.text.text);
-
-      Clipboard.setData(ClipboardData(text: selectedText));
-    },
-    onPastePressed: () async {
-      final clipboardContent = await Clipboard.getData('text/plain');
-      if (clipboardContent == null || clipboardContent.text == null) {
-        return;
-      }
-
-      final textController = controller.textController;
-      final selection = textController.selection;
-      if (selection.isCollapsed) {
-        textController.insertAtCaret(text: clipboardContent.text!);
-      } else {
-        textController.replaceSelectionWithUnstyledText(replacementText: clipboardContent.text!);
-      }
-    },
-    onSelectAllPressed: () {
-      controller.textController.selectAll();
-    },
+    onCutPressed: isSelectionExpanded //
+        ? () => _onToolbarCutPressed(controller)
+        : null,
+    onCopyPressed: isSelectionExpanded //
+        ? () => _onToolbarCopyPressed(controller)
+        : null,
+    onPastePressed: () => _onToolbarPastePressed(controller),
+    onSelectAllPressed: () => _onToolbarSelectAllPressed(controller),
   );
+}
+
+void _onToolbarCutPressed(AndroidEditingOverlayController controller) {
+  final textController = controller.textController;
+
+  final selection = textController.selection;
+  if (selection.isCollapsed) {
+    return;
+  }
+
+  final selectedText = selection.textInside(textController.text.toPlainText());
+
+  textController.deleteSelectedText();
+
+  Clipboard.setData(ClipboardData(text: selectedText));
+}
+
+void _onToolbarCopyPressed(AndroidEditingOverlayController controller) {
+  final textController = controller.textController;
+  final selection = textController.selection;
+  final selectedText = selection.textInside(textController.text.toPlainText());
+
+  Clipboard.setData(ClipboardData(text: selectedText));
+}
+
+Future<void> _onToolbarPastePressed(AndroidEditingOverlayController controller) async {
+  final clipboardContent = await Clipboard.getData('text/plain');
+  if (clipboardContent == null || clipboardContent.text == null) {
+    return;
+  }
+
+  final textController = controller.textController;
+  final selection = textController.selection;
+  if (selection.isCollapsed) {
+    textController.insertAtCaret(text: clipboardContent.text!);
+  } else {
+    textController.replaceSelectionWithUnstyledText(replacementText: clipboardContent.text!);
+  }
+}
+
+void _onToolbarSelectAllPressed(AndroidEditingOverlayController controller) {
+  controller.textController.selectAll();
 }

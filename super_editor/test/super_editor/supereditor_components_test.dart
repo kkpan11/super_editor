@@ -78,6 +78,21 @@ void main() {
         expect(RendererBinding.instance.mouseTracker.debugDeviceActiveCursor(1), SystemMouseCursors.basic);
       });
     });
+
+    testWidgetsOnArbitraryDesktop('does not crash when if finds an unkown node type', (tester) async {
+      // Pump an editor with a node that has no corresponding component builder.
+      await tester //
+          .createDocument()
+          .withCustomContent(
+            MutableDocument(
+              nodes: [_UnknownNode(id: '1')],
+            ),
+          )
+          .pump();
+
+      // Reaching this point means the editor did not crash because of the
+      // unkown node.
+    });
   });
 }
 
@@ -125,8 +140,7 @@ class HintTextComponentBuilder implements ComponentBuilder {
       ),
       textSelection: textSelection,
       selectionColor: componentViewModel.selectionColor,
-      composingRegion: componentViewModel.composingRegion,
-      showComposingUnderline: componentViewModel.showComposingUnderline,
+      underlines: componentViewModel.createUnderlines(),
     );
   }
 }
@@ -149,7 +163,7 @@ Future<void> _pumpImageTestApp(
                 width: double.infinity,
               ).toMetadata(),
             ),
-            ...longTextDoc().nodes,
+            ...longTextDoc(),
           ],
         ),
       )
@@ -179,9 +193,39 @@ class _FakeImageComponentBuilder implements ComponentBuilder {
     return ImageComponent(
       componentKey: componentContext.componentKey,
       imageUrl: componentViewModel.imageUrl,
-      selection: componentViewModel.selection,
+      selection: componentViewModel.selection?.nodeSelection as UpstreamDownstreamNodeSelection?,
       selectionColor: componentViewModel.selectionColor,
       imageBuilder: (context, imageUrl) => const SizedBox(height: 100, width: 100),
     );
+  }
+}
+
+/// A [DocumentNode] without any content.
+///
+/// Used to simulate an app-level node type that the editor
+/// doesn't know about.
+@immutable
+class _UnknownNode extends BlockNode {
+  _UnknownNode({required this.id});
+
+  @override
+  final String id;
+
+  @override
+  String? copyContent(NodeSelection selection) => '';
+
+  @override
+  _UnknownNode copyWithAddedMetadata(Map<String, dynamic> newProperties) {
+    return _UnknownNode(id: id);
+  }
+
+  @override
+  _UnknownNode copyAndReplaceMetadata(Map<String, dynamic> newMetadata) {
+    return _UnknownNode(id: id);
+  }
+
+  @override
+  _UnknownNode copy() {
+    return _UnknownNode(id: id);
   }
 }

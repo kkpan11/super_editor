@@ -38,6 +38,52 @@ void main() {
         expect(richText.getSpanForPosition(const TextPosition(offset: 6))!.style!.color, Colors.white);
         expect(richText.getSpanForPosition(const TextPosition(offset: 10))!.style!.color, Colors.white);
       });
+
+      testWidgetsOnAllPlatforms("overrides existing color attributions", (tester) async {
+        final stylesheet = defaultStylesheet.copyWith(
+          selectedTextColorStrategy: ({required Color originalTextColor, required Color selectionHighlightColor}) {
+            return Colors.white;
+          },
+        );
+
+        // Pump an editor with green text throught the document.
+        await tester //
+            .createDocument()
+            .withCustomContent(
+              MutableDocument(
+                nodes: [
+                  ParagraphNode(
+                    id: '1',
+                    text: AttributedText(
+                      'Lorem ipsum dolor',
+                      AttributedSpans(
+                        attributions: [
+                          const SpanMarker(
+                              attribution: ColorAttribution(Colors.green), offset: 0, markerType: SpanMarkerType.start),
+                          const SpanMarker(
+                              attribution: ColorAttribution(Colors.green), offset: 16, markerType: SpanMarkerType.end),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            )
+            .useStylesheet(stylesheet)
+            .pump();
+
+        // Double tap to select the word "Lorem".
+        await tester.doubleTapInParagraph('1', 2);
+
+        // Ensure that the first word is white and the rest is green.
+        final richText = SuperEditorInspector.findRichTextInParagraph('1');
+
+        expect(richText.getSpanForPosition(const TextPosition(offset: 0))!.style!.color, Colors.white);
+        expect(richText.getSpanForPosition(const TextPosition(offset: 4))!.style!.color, Colors.white);
+
+        expect(richText.getSpanForPosition(const TextPosition(offset: 5))!.style!.color, Colors.green);
+        expect(richText.getSpanForPosition(const TextPosition(offset: 16))!.style!.color, Colors.green);
+      });
     });
 
     testWidgetsOnArbitraryDesktop("calculates upstream document selection within a single node", (tester) async {
@@ -57,7 +103,7 @@ void main() {
       // directions: right-to-left is upstream for a single line, and up-to-down is
       // downstream for multi-node. This test ensures that the single-line direction is
       // honored by the document layout, rather than the more common multi-node calculation.
-      final selection = layout.getDocumentSelectionInRegion(const Offset(200, 35), const Offset(150, 45));
+      final selection = layout.getDocumentSelectionInRegion(const Offset(1100, 35), const Offset(1050, 45));
       expect(selection, isNotNull);
 
       // Ensure that the document selection is upstream.
@@ -83,7 +129,7 @@ void main() {
       // directions: left-to-right is downstream for a single line, and down-to-up is
       // upstream for multi-node. This test ensures that the single-line direction is
       // honored by the document layout, rather than the more common multi-node calculation.
-      final selection = layout.getDocumentSelectionInRegion(const Offset(150, 45), const Offset(200, 35));
+      final selection = layout.getDocumentSelectionInRegion(const Offset(1050, 45), const Offset(1100, 35));
       expect(selection, isNotNull);
 
       // Ensure that the document selection is downstream.
@@ -97,7 +143,7 @@ void main() {
           .createDocument() //
           .fromMarkdown("This is paragraph one.\nThis is paragraph two.") //
           .pump();
-      final nodeId = testContext.findEditContext().document.nodes.first.id;
+      final nodeId = testContext.findEditContext().document.first.id;
 
       /// Triple tap on the first line in the paragraph node.
       await tester.tripleTapInParagraph(nodeId, 10);
@@ -128,7 +174,7 @@ void main() {
         (tester) async {
       final testContext = await _pumpUnselectableComponentTestApp(tester);
 
-      final firstParagraphId = testContext.findEditContext().document.nodes.first.id;
+      final firstParagraphId = testContext.findEditContext().document.first.id;
 
       // TODO: replace the following direct layout access with a simulated user
       // drag, once we've merged some new dragging tools in #645.
@@ -155,7 +201,7 @@ void main() {
         (tester) async {
       final testContext = await _pumpUnselectableComponentTestApp(tester);
 
-      final secondParagraphId = testContext.findEditContext().document.nodes.last.id;
+      final secondParagraphId = testContext.findEditContext().document.last.id;
 
       // TODO: replace the following direct layout access with a simulated user
       // drag, once we've merged some new dragging tools in #645.
@@ -187,7 +233,7 @@ void main() {
         (tester) async {
       final testContext = await _pumpUnselectableComponentTestApp(tester);
 
-      final secondParagraphId = testContext.findEditContext().document.nodes.last.id;
+      final secondParagraphId = testContext.findEditContext().document.last.id;
 
       // TODO: replace the following direct layout access with a simulated user
       // drag, once we've merged some new dragging tools in #645.
@@ -219,7 +265,7 @@ void main() {
         (tester) async {
       final testContext = await _pumpUnselectableComponentTestApp(tester);
 
-      final firstParagraphId = testContext.findEditContext().document.nodes.first.id;
+      final firstParagraphId = testContext.findEditContext().document.first.id;
 
       // TODO: replace the following direct layout access with a simulated user
       // drag, once we've merged some new dragging tools in #645.
@@ -246,8 +292,8 @@ void main() {
         (tester) async {
       final testContext = await _pumpUnselectableComponentTestApp(tester);
 
-      final firstParagraphId = testContext.findEditContext().document.nodes.first.id;
-      final secondParagraphId = testContext.findEditContext().document.nodes.last.id;
+      final firstParagraphId = testContext.findEditContext().document.first.id;
+      final secondParagraphId = testContext.findEditContext().document.last.id;
 
       // TODO: replace the following direct layout access with a simulated user
       // drag, once we've merged some new dragging tools in #645.
@@ -277,8 +323,8 @@ void main() {
         (tester) async {
       final testContext = await _pumpUnselectableComponentTestApp(tester);
 
-      final firstParagraphId = testContext.findEditContext().document.nodes.first.id;
-      final secondParagraphId = testContext.findEditContext().document.nodes.last.id;
+      final firstParagraphId = testContext.findEditContext().document.first.id;
+      final secondParagraphId = testContext.findEditContext().document.last.id;
 
       // TODO: replace the following direct layout access with a simulated user
       // drag, once we've merged some new dragging tools in #645.
@@ -449,7 +495,7 @@ void main() {
         SuperEditorInspector.findDocumentSelection(),
         DocumentSelection.collapsed(
           position: DocumentPosition(
-            nodeId: doc!.nodes.last.id,
+            nodeId: doc!.last.id,
             nodePosition: const TextNodePosition(offset: 477),
           ),
         ),
@@ -493,7 +539,7 @@ void main() {
         SuperEditorInspector.findDocumentSelection(),
         DocumentSelection.collapsed(
           position: DocumentPosition(
-            nodeId: doc!.nodes.last.id,
+            nodeId: doc!.last.id,
             nodePosition: const TextNodePosition(offset: 477),
           ),
         ),
@@ -527,7 +573,7 @@ void main() {
         SuperEditorInspector.findDocumentSelection(),
         DocumentSelection.collapsed(
           position: DocumentPosition(
-            nodeId: doc!.nodes.last.id,
+            nodeId: doc!.last.id,
             nodePosition: const TextNodePosition(offset: 477),
           ),
         ),
@@ -553,7 +599,7 @@ void main() {
         SuperEditorInspector.findDocumentSelection(),
         DocumentSelection.collapsed(
           position: DocumentPosition(
-            nodeId: doc!.nodes.last.id,
+            nodeId: doc!.last.id,
             nodePosition: const TextNodePosition(offset: 477),
           ),
         ),
@@ -596,7 +642,7 @@ Second Paragraph
       await tester.pumpAndSettle();
 
       final doc = SuperEditorInspector.findDocument();
-      final secondParagraphNodeId = doc!.nodes[1].id;
+      final secondParagraphNodeId = doc!.getNodeAt(1)!.id;
 
       // Ensure selection is at the last character of the second paragraph.
       expect(
@@ -619,6 +665,7 @@ Second Paragraph
       // result.
 
       final textFieldFocus = FocusNode();
+      final subtreeFocus = FocusNode();
       final editorFocus = FocusNode();
       await tester
           .createDocument()
@@ -630,9 +677,9 @@ Second Paragraph
               home: Scaffold(
                 body: Column(
                   children: [
-                    FocusWithCustomParent(
-                      focusNode: textFieldFocus,
-                      parentFocusNode: editorFocus,
+                    Focus(
+                      focusNode: subtreeFocus,
+                      parentNode: editorFocus,
                       child: SuperTextField(
                         focusNode: textFieldFocus,
                         // We put the SuperTextField in keyboard mode so that the SuperTextField
@@ -686,6 +733,7 @@ Second Paragraph
       // result.
 
       final textFieldFocus = FocusNode();
+      final subtreeFocus = FocusNode();
       final editorFocus = FocusNode();
       await tester
           .createDocument()
@@ -700,9 +748,9 @@ Second Paragraph
               home: Scaffold(
                 body: Column(
                   children: [
-                    FocusWithCustomParent(
-                      focusNode: textFieldFocus,
-                      parentFocusNode: editorFocus,
+                    Focus(
+                      focusNode: subtreeFocus,
+                      parentNode: editorFocus,
                       child: SuperTextField(
                         focusNode: textFieldFocus,
                         // We put the SuperTextField in keyboard mode so that the SuperTextField
@@ -752,6 +800,7 @@ Second Paragraph
 
     testWidgetsOnAllPlatforms("retains selection when user types in sub-focus text field", (tester) async {
       final textFieldFocus = FocusNode();
+      final subTreeFocusNode = FocusNode();
       final textFieldController = ImeAttributedTextEditingController();
       final editorFocus = FocusNode();
       const initialEditorSelection = DocumentSelection(
@@ -772,9 +821,9 @@ Second Paragraph
               home: Scaffold(
                 body: Column(
                   children: [
-                    FocusWithCustomParent(
-                      focusNode: textFieldFocus,
-                      parentFocusNode: editorFocus,
+                    Focus(
+                      focusNode: subTreeFocusNode,
+                      parentNode: editorFocus,
                       child: SuperTextField(
                         focusNode: textFieldFocus,
                         textController: textFieldController,
@@ -801,7 +850,7 @@ Second Paragraph
       await tester.typeImeText("Hello, world", find.byType(SuperTextField));
 
       // Ensure the text field received the text.
-      expect(textFieldController.text.text, "Hello, world");
+      expect(textFieldController.text.toPlainText(), "Hello, world");
 
       // Ensure that SuperEditor has the same selection as before.
       expect(SuperEditorInspector.findDocumentSelection(), initialEditorSelection);
@@ -1077,7 +1126,7 @@ Second Paragraph
       // Place the caret at the middle of the first word.
       await tester.placeCaretInParagraph('1', 2);
 
-      final text = SuperEditorInspector.findTextInParagraph('1').text;
+      final text = SuperEditorInspector.findTextInComponent('1').toPlainText();
 
       await tester.ime.sendDeltas(
         [
@@ -1130,7 +1179,7 @@ Second Paragraph
         SuperEditorInspector.findDocumentSelection(),
         DocumentSelection.collapsed(
           position: DocumentPosition(
-            nodeId: doc.nodes.last.id,
+            nodeId: doc.last.id,
             nodePosition: const TextNodePosition(offset: 477),
           ),
         ),
@@ -1141,7 +1190,7 @@ Second Paragraph
         ChangeSelectionRequest(
           DocumentSelection.collapsed(
             position: DocumentPosition(
-              nodeId: doc.nodes.last.id,
+              nodeId: doc.last.id,
               nodePosition: const TextNodePosition(offset: 477),
             ),
           ),

@@ -1,8 +1,12 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:follow_the_leader/follow_the_leader.dart';
 import 'package:super_editor/src/infrastructure/_logging.dart';
+import 'package:super_editor/src/infrastructure/document_gestures_interaction_overrides.dart';
 import 'package:super_editor/src/infrastructure/flutter/flutter_scheduler.dart';
 import 'package:super_editor/src/infrastructure/multi_tap_gesture.dart';
+import 'package:super_editor/src/super_textfield/infrastructure/text_field_gestures_interaction_overrides.dart';
 import 'package:super_editor/src/super_textfield/super_textfield.dart';
 import 'package:super_text_layout/super_text_layout.dart';
 
@@ -50,6 +54,7 @@ class AndroidTextFieldTouchInteractor extends StatefulWidget {
     required this.getGlobalCaretRect,
     required this.isMultiline,
     required this.handleColor,
+    this.tapHandlers = const [],
     this.showDebugPaint = false,
     required this.child,
   }) : super(key: key);
@@ -91,6 +96,9 @@ class AndroidTextFieldTouchInteractor extends StatefulWidget {
 
   /// The color of expanded selection drag handles.
   final Color handleColor;
+
+  /// {@macro super_text_field_tap_handlers}
+  final List<SuperTextFieldTapHandler> tapHandlers;
 
   /// Whether to paint debugging guides and regions.
   final bool showDebugPaint;
@@ -156,27 +164,55 @@ class AndroidTextFieldTouchInteractorState extends State<AndroidTextFieldTouchIn
       //
       // We don't do this when the user is dragging the caret because the user's finger position
       // and the auto-scrolling system should control the scroll offset in that case.
-      widget.textScrollController.ensureExtentIsVisible();
+      onNextFrame((timeStamp) {
+        // We adjust for the extent offset in the next frame because we need the
+        // underlying RenderParagraph to update first, so that we can inspect the
+        // text layout for the most recent text and selection.
+        widget.textScrollController.ensureExtentIsVisible();
+      });
     }
   }
 
   void _onTapDown(TapDownDetails details) {
-    _log.fine("User tapped down");
-    if (!widget.focusNode.hasFocus) {
-      _log.finer("Field isn't focused. Ignoring press.");
-      return;
-    }
+    final textOffset = _globalOffsetToTextOffset(details.globalPosition);
 
-    // When the user drags, the toolbar should not be visible.
-    // A drag can begin with a tap down, so we hide the toolbar
-    // preemptively.
-    widget.editingOverlayController.hideToolbar();
+    for (final handler in widget.tapHandlers) {
+      final result = handler.onTapDown(
+        SuperTextFieldGestureDetails(
+          textLayout: _textLayout,
+          textController: widget.textController,
+          globalOffset: details.globalPosition,
+          layoutOffset: details.localPosition,
+          textOffset: textOffset,
+        ),
+      );
+
+      if (result == TapHandlingInstruction.halt) {
+        return;
+      }
+    }
   }
 
   void _onTapUp(TapUpDetails details) {
     _log.fine('User released a tap');
 
-    _selectAtOffset(details.localPosition);
+    final textOffset = _globalOffsetToTextOffset(details.globalPosition);
+
+    for (final handler in widget.tapHandlers) {
+      final result = handler.onTapUp(
+        SuperTextFieldGestureDetails(
+          textLayout: _textLayout,
+          textController: widget.textController,
+          globalOffset: details.globalPosition,
+          layoutOffset: details.localPosition,
+          textOffset: textOffset,
+        ),
+      );
+
+      if (result == TapHandlingInstruction.halt) {
+        return;
+      }
+    }
 
     if (widget.focusNode.hasFocus && widget.textController.isAttachedToIme) {
       widget.textController.showKeyboard();
@@ -199,9 +235,8 @@ class AndroidTextFieldTouchInteractorState extends State<AndroidTextFieldTouchIn
         ? tapTextPosition == previousSelection.extent
         : tapTextPosition.offset >= previousSelection.start && tapTextPosition.offset <= previousSelection.end;
 
-    if (didTapOnExistingSelection) {
-      // Toggle the toolbar display when the user taps on the collapsed caret,
-      // or on top of an existing selection.
+    if (didTapOnExistingSelection && previousSelection.isCollapsed) {
+      // Toggle the toolbar display when the user taps on the collapsed caret.
       widget.editingOverlayController.toggleToolbar();
     } else {
       // The user tapped somewhere in the text outside any existing selection.
@@ -219,6 +254,16 @@ class AndroidTextFieldTouchInteractorState extends State<AndroidTextFieldTouchIn
       ..startCollapsedHandleAutoHideCountdown();
   }
 
+  void _onTapCancel() {
+    for (final handler in widget.tapHandlers) {
+      final result = handler.onTapCancel();
+
+      if (result == TapHandlingInstruction.halt) {
+        return;
+      }
+    }
+  }
+
   /// Places the caret in the field's text based on the given [localOffset],
   /// and displays the drag handle.
   void _selectAtOffset(Offset localOffset) {
@@ -228,7 +273,7 @@ class AndroidTextFieldTouchInteractorState extends State<AndroidTextFieldTouchIn
     final tapTextPosition = _getTextPositionAtOffset(localOffset);
     if (tapTextPosition == null) {
       // This situation indicates the user tapped in empty space
-      widget.textController.selection = TextSelection.collapsed(offset: widget.textController.text.text.length);
+      widget.textController.selection = TextSelection.collapsed(offset: widget.textController.text.length);
     } else {
       // Update the text selection to a collapsed selection where the user tapped.
       widget.textController.selection = tapTextPosition.offset >= 0
@@ -252,6 +297,25 @@ class AndroidTextFieldTouchInteractorState extends State<AndroidTextFieldTouchIn
 
   void _onDoubleTapDown(TapDownDetails details) {
     _log.fine("User double-tapped down");
+
+    final textOffset = _globalOffsetToTextOffset(details.globalPosition);
+
+    for (final handler in widget.tapHandlers) {
+      final result = handler.onDoubleTapDown(
+        SuperTextFieldGestureDetails(
+          textLayout: _textLayout,
+          textController: widget.textController,
+          globalOffset: details.globalPosition,
+          layoutOffset: details.localPosition,
+          textOffset: textOffset,
+        ),
+      );
+
+      if (result == TapHandlingInstruction.halt) {
+        return;
+      }
+    }
+
     widget.focusNode.requestFocus();
 
     final tapTextPosition = _getTextPositionAtOffset(details.localPosition);
@@ -275,8 +339,57 @@ class AndroidTextFieldTouchInteractorState extends State<AndroidTextFieldTouchIn
     }
   }
 
+  void _onDoubleTapUp(TapUpDetails details) {
+    final textOffset = _globalOffsetToTextOffset(details.globalPosition);
+
+    for (final handler in widget.tapHandlers) {
+      final result = handler.onDoubleTapUp(
+        SuperTextFieldGestureDetails(
+          textLayout: _textLayout,
+          textController: widget.textController,
+          globalOffset: details.globalPosition,
+          layoutOffset: details.localPosition,
+          textOffset: textOffset,
+        ),
+      );
+
+      if (result == TapHandlingInstruction.halt) {
+        return;
+      }
+    }
+  }
+
+  void _onDoubleTapCancel() {
+    for (final handler in widget.tapHandlers) {
+      final result = handler.onDoubleTapCancel();
+
+      if (result == TapHandlingInstruction.halt) {
+        return;
+      }
+    }
+  }
+
   void _onTripleTapDown(TapDownDetails details) {
     _log.fine("User triple-tapped down");
+
+    final textOffset = _globalOffsetToTextOffset(details.globalPosition);
+
+    for (final handler in widget.tapHandlers) {
+      final result = handler.onTripleTapDown(
+        SuperTextFieldGestureDetails(
+          textLayout: _textLayout,
+          textController: widget.textController,
+          globalOffset: details.globalPosition,
+          layoutOffset: details.localPosition,
+          textOffset: textOffset,
+        ),
+      );
+
+      if (result == TapHandlingInstruction.halt) {
+        return;
+      }
+    }
+
     final tapTextPosition = _textLayout.getPositionAtOffset(details.localPosition)!;
 
     widget.textController.selection =
@@ -289,6 +402,36 @@ class AndroidTextFieldTouchInteractorState extends State<AndroidTextFieldTouchIn
       widget.editingOverlayController
         ..unHideCollapsedHandle()
         ..startCollapsedHandleAutoHideCountdown();
+    }
+  }
+
+  void _onTripleTapUp(TapUpDetails details) {
+    final textOffset = _globalOffsetToTextOffset(details.globalPosition);
+
+    for (final handler in widget.tapHandlers) {
+      final result = handler.onTripleTapUp(
+        SuperTextFieldGestureDetails(
+          textLayout: _textLayout,
+          textController: widget.textController,
+          globalOffset: details.globalPosition,
+          layoutOffset: details.localPosition,
+          textOffset: textOffset,
+        ),
+      );
+
+      if (result == TapHandlingInstruction.halt) {
+        return;
+      }
+    }
+  }
+
+  void _onTripleTapCancel() {
+    for (final handler in widget.tapHandlers) {
+      final result = handler.onTripleTapCancel();
+
+      if (result == TapHandlingInstruction.halt) {
+        return;
+      }
     }
   }
 
@@ -312,6 +455,11 @@ class AndroidTextFieldTouchInteractorState extends State<AndroidTextFieldTouchIn
 
       // Cancel any ongoing handle auto-disappear timer.
       widget.editingOverlayController.cancelCollapsedHandleAutoHideCountdown();
+
+      if (widget.textController.selection.isCollapsed) {
+        // The user is dragging the caret. Stop the caret from blinking while dragging.
+        widget.editingOverlayController.stopCaretBlinking();
+      }
     });
   }
 
@@ -322,9 +470,14 @@ class AndroidTextFieldTouchInteractorState extends State<AndroidTextFieldTouchIn
       return;
     }
 
-    widget.textController.selection = TextSelection.collapsed(
+    final newSelection = TextSelection.collapsed(
       offset: _globalOffsetToTextPosition(details.globalPosition).offset,
     );
+
+    if (newSelection != widget.textController.selection) {
+      widget.textController.selection = newSelection;
+      HapticFeedback.lightImpact();
+    }
 
     setState(() {
       _globalDragOffset = _globalDragOffset! + details.delta;
@@ -363,6 +516,10 @@ class AndroidTextFieldTouchInteractorState extends State<AndroidTextFieldTouchIn
       if (!widget.textController.selection.isCollapsed) {
         widget.editingOverlayController.showToolbar();
       } else {
+        // The user stopped dragging the caret and the selection is collapsed.
+        // Start the caret blinking again.
+        widget.editingOverlayController.startCaretBlinking();
+
         // The selection is collapsed. The collapsed handle should disappear
         // after some inactivity. Start the countdown (or restart an in-progress
         // countdown).
@@ -409,7 +566,7 @@ class AndroidTextFieldTouchInteractorState extends State<AndroidTextFieldTouchIn
     // We show placeholder text when there is no text content. We don't want
     // to place the caret in the placeholder text, so when _currentText is
     // empty, explicitly set the text position to an offset of -1.
-    if (widget.textController.text.text.isEmpty) {
+    if (widget.textController.text.isEmpty) {
       return const TextPosition(offset: -1);
     }
 
@@ -477,8 +634,13 @@ class AndroidTextFieldTouchInteractorState extends State<AndroidTextFieldTouchIn
               recognizer
                 ..onTapDown = _onTapDown
                 ..onTapUp = _onTapUp
+                ..onTapCancel = _onTapCancel
                 ..onDoubleTapDown = _onDoubleTapDown
+                ..onDoubleTapUp = _onDoubleTapUp
+                ..onDoubleTapCancel = _onDoubleTapCancel
                 ..onTripleTapDown = _onTripleTapDown
+                ..onTripleTapUp = _onTripleTapUp
+                ..onTripleTapCancel = _onTripleTapCancel
                 ..gestureSettings = gestureSettings;
             },
           ),
@@ -530,7 +692,7 @@ class AndroidTextFieldTouchInteractorState extends State<AndroidTextFieldTouchIn
     return Positioned(
       left: extentOffsetInViewport.dx,
       top: extentOffsetInViewport.dy + (extentLineHeight / 2),
-      child: CompositedTransformTarget(
+      child: Leader(
         link: widget.editingOverlayController.magnifierFocalPoint,
         child: widget.showDebugPaint
             ? FractionalTranslation(
@@ -538,7 +700,7 @@ class AndroidTextFieldTouchInteractorState extends State<AndroidTextFieldTouchIn
                 child: Container(
                   width: 20,
                   height: 20,
-                  color: Colors.purpleAccent.withOpacity(0.5),
+                  color: Colors.purpleAccent.withValues(alpha: 0.5),
                 ),
               )
             : const SizedBox(width: 1, height: 1),

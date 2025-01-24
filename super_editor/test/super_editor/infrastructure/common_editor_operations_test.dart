@@ -1,3 +1,4 @@
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_test_robots/flutter_test_robots.dart';
 import 'package:flutter_test_runners/flutter_test_runners.dart';
@@ -42,10 +43,10 @@ void main() {
           documentLayoutResolver: () => FakeDocumentLayout(),
         );
 
-        commonOps.deleteSelection();
+        commonOps.deleteSelection(TextAffinity.downstream);
 
-        expect(document.nodes.length, 1);
-        expect(document.nodes.first.id, "2");
+        expect(document.nodeCount, 1);
+        expect(document.first.id, "2");
         expect(composer.selection!.extent.nodeId, "2");
         expect(composer.selection!.extent.nodePosition, const TextNodePosition(offset: 0));
       });
@@ -80,10 +81,10 @@ void main() {
           documentLayoutResolver: () => FakeDocumentLayout(),
         );
 
-        commonOps.deleteSelection();
+        commonOps.deleteSelection(TextAffinity.downstream);
 
-        expect(document.nodes.length, 1);
-        expect(document.nodes.first.id, "2");
+        expect(document.nodeCount, 1);
+        expect(document.first.id, "2");
         expect(composer.selection!.extent.nodeId, "2");
         expect(composer.selection!.extent.nodePosition, const TextNodePosition(offset: 0));
       });
@@ -118,10 +119,10 @@ void main() {
           documentLayoutResolver: () => FakeDocumentLayout(),
         );
 
-        commonOps.deleteSelection();
+        commonOps.deleteSelection(TextAffinity.downstream);
 
-        expect(document.nodes.length, 1);
-        expect(document.nodes.first.id, "1");
+        expect(document.nodeCount, 1);
+        expect(document.first.id, "1");
         expect(composer.selection!.extent.nodeId, "1");
         expect(composer.selection!.extent.nodePosition, const TextNodePosition(offset: 50));
       });
@@ -151,11 +152,11 @@ void main() {
           documentLayoutResolver: () => FakeDocumentLayout(),
         );
 
-        commonOps.deleteSelection();
+        commonOps.deleteSelection(TextAffinity.downstream);
 
-        expect(document.nodes.length, 1);
-        expect(document.nodes.first, isA<ParagraphNode>());
-        expect(document.nodes.first.id, "1");
+        expect(document.nodeCount, 1);
+        expect(document.first, isA<ParagraphNode>());
+        expect(document.first.id, "1");
         expect(composer.selection!.extent.nodePosition, const TextNodePosition(offset: 0));
       });
     });
@@ -185,6 +186,29 @@ void main() {
         );
       });
     });
+
+    group('getDocumentPositionAfterExpandedDeletion', () {
+      test('returns null for collapsed selection', () {
+        final node = HorizontalRuleNode(
+          id: "1",
+        );
+
+        expect(
+          CommonEditorOperations.getDocumentPositionAfterExpandedDeletion(
+            document: MutableDocument(nodes: [
+              node,
+            ]),
+            selection: DocumentSelection.collapsed(
+              position: DocumentPosition(
+                nodeId: node.id,
+                nodePosition: node.endPosition,
+              ),
+            ),
+          ),
+          isNull,
+        );
+      });
+    });
   });
 }
 
@@ -198,12 +222,12 @@ MutableDocument _singleParagraphWithLinkDoc() {
           AttributedSpans(
             attributions: [
               SpanMarker(
-                attribution: LinkAttribution(url: Uri.parse('https://google.com')),
+                attribution: LinkAttribution.fromUri(Uri.parse('https://google.com')),
                 offset: 0,
                 markerType: SpanMarkerType.start,
               ),
               SpanMarker(
-                attribution: LinkAttribution(url: Uri.parse('https://google.com')),
+                attribution: LinkAttribution.fromUri(Uri.parse('https://google.com')),
                 offset: 17,
                 markerType: SpanMarkerType.end,
               ),

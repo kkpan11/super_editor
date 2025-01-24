@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:follow_the_leader/follow_the_leader.dart';
 import 'package:overlord/follow_the_leader.dart';
 import 'package:super_editor/src/core/document.dart';
@@ -15,6 +16,7 @@ import 'package:super_editor/src/infrastructure/flutter/flutter_scheduler.dart';
 import 'package:super_editor/src/infrastructure/multi_listenable_builder.dart';
 import 'package:super_editor/src/infrastructure/platforms/ios/selection_handles.dart';
 import 'package:super_editor/src/infrastructure/platforms/mobile_documents.dart';
+import 'package:super_editor/src/infrastructure/render_sliver_ext.dart';
 import 'package:super_editor/src/infrastructure/touch_controls.dart';
 import 'package:super_text_layout/super_text_layout.dart';
 
@@ -121,7 +123,7 @@ class _IosFloatingToolbarOverlayState extends State<IosFloatingToolbarOverlay> w
       child: Container(
         width: double.infinity,
         height: double.infinity,
-        color: Colors.yellow.withOpacity(0.2),
+        color: Colors.yellow.withValues(alpha: 0.2),
       ),
     );
   }
@@ -136,17 +138,7 @@ class IosDocumentGestureEditingController extends GestureEditingController {
     required super.selectionLinks,
     required super.magnifierFocalPointLink,
     required super.overlayController,
-  }) : _documentLayoutLink = documentLayoutLink;
-
-  /// Layer link that's aligned to the top-left corner of the document layout.
-  ///
-  /// Some of the offsets reported by this controller are based on the
-  /// document layout coordinate space. Therefore, to honor those offsets on
-  /// the screen, this `LayerLink` should be used to align the controls with
-  /// the document layout before applying the offset that sits within the
-  /// document layout.
-  LayerLink get documentLayoutLink => _documentLayoutLink;
-  final LayerLink _documentLayoutLink;
+  });
 
   /// Whether or not a caret should be displayed.
   bool get hasCaret => caretTop != null;
@@ -296,8 +288,11 @@ class FloatingCursorController {
   /// or not a standard gray caret should be displayed.
   final isNearText = ValueNotifier<bool>(false);
 
-  /// The offset, width, and height of the active floating cursor.
+  /// The offset, width, and height of the active floating cursor in viewport coordinates.
   final cursorGeometryInViewport = ValueNotifier<Rect?>(null);
+
+  /// The offset, width, and height of the active floating cursor in document coordinates.
+  final cursorGeometryInDocument = ValueNotifier<Rect?>(null);
 
   /// Report that the user has activated the floating cursor.
   void onStart() {
@@ -440,7 +435,8 @@ class _IosToolbarFocalPointDocumentLayerState extends DocumentLayoutLayerState<I
   }
 
   @override
-  Rect? computeLayoutDataWithDocumentLayout(BuildContext context, DocumentLayout documentLayout) {
+  Rect? computeLayoutDataWithDocumentLayout(
+      BuildContext contentLayersContext, BuildContext documentContext, DocumentLayout documentLayout) {
     final documentSelection = widget.selection.value;
     if (documentSelection == null) {
       return null;
@@ -503,7 +499,11 @@ class IosHandlesDocumentLayer extends DocumentLayoutLayerStatefulWidget {
     required this.documentLayout,
     required this.selection,
     required this.changeSelection,
+    this.areSelectionHandlesAllowed,
+    this.handleBeingDragged,
     required this.handleColor,
+    this.caretWidth = 2,
+    this.handleBallDiameter = defaultIosHandleBallDiameter,
     required this.shouldCaretBlink,
     this.floatingCursorController,
     this.showDebugPaint = false,
@@ -517,8 +517,22 @@ class IosHandlesDocumentLayer extends DocumentLayoutLayerStatefulWidget {
 
   final void Function(DocumentSelection?, SelectionChangeType, String selectionReason) changeSelection;
 
+  /// {@macro are_selection_handles_allowed}
+  final ValueListenable<bool>? areSelectionHandlesAllowed;
+
+  /// Reports the [HandleType] of the handle being dragged by the user.
+  ///
+  /// If no drag handle is being dragged, this value is `null`.
+  final ValueListenable<HandleType?>? handleBeingDragged;
+
   /// Color the iOS-style text selection drag handles.
   final Color handleColor;
+
+  final double caretWidth;
+
+  /// The diameter of the small circle that appears on the top and bottom of
+  /// expanded iOS text handles.
+  final double handleBallDiameter;
 
   /// Whether the caret should blink, whenever the caret is visible.
   final ValueListenable<bool> shouldCaretBlink;
@@ -538,10 +552,6 @@ class IosHandlesDocumentLayer extends DocumentLayoutLayerStatefulWidget {
 @visibleForTesting
 class IosControlsDocumentLayerState extends DocumentLayoutLayerState<IosHandlesDocumentLayer, DocumentSelectionLayout>
     with SingleTickerProviderStateMixin {
-  /// The diameter of the small circle that appears on the top and bottom of
-  /// expanded iOS text handles.
-  static const ballDiameter = 8.0;
-
   // These global keys are assigned to each draggable handle to
   // prevent a strange dragging issue.
   //
@@ -564,11 +574,12 @@ class IosControlsDocumentLayerState extends DocumentLayoutLayerState<IosHandlesD
   @override
   void initState() {
     super.initState();
-    _caretBlinkController = BlinkController(tickerProvider: this);
+    _caretBlinkController = BlinkController.withTimer();
 
     widget.selection.addListener(_onSelectionChange);
     widget.shouldCaretBlink.addListener(_onBlinkModeChange);
     widget.floatingCursorController?.isActive.addListener(_onFloatingCursorActivationChange);
+    widget.handleBeingDragged?.addListener(_onDragChanged);
 
     _onBlinkModeChange();
   }
@@ -591,6 +602,11 @@ class IosControlsDocumentLayerState extends DocumentLayoutLayerState<IosHandlesD
       oldWidget.floatingCursorController?.isActive.removeListener(_onFloatingCursorActivationChange);
       widget.floatingCursorController?.isActive.addListener(_onFloatingCursorActivationChange);
     }
+
+    if (widget.handleBeingDragged != oldWidget.handleBeingDragged) {
+      oldWidget.handleBeingDragged?.removeListener(_onDragChanged);
+      widget.handleBeingDragged?.addListener(_onDragChanged);
+    }
   }
 
   @override
@@ -598,6 +614,7 @@ class IosControlsDocumentLayerState extends DocumentLayoutLayerState<IosHandlesD
     widget.selection.removeListener(_onSelectionChange);
     widget.shouldCaretBlink.removeListener(_onBlinkModeChange);
     widget.floatingCursorController?.isActive.removeListener(_onFloatingCursorActivationChange);
+    widget.handleBeingDragged?.removeListener(_onDragChanged);
 
     _caretBlinkController.dispose();
     super.dispose();
@@ -613,15 +630,48 @@ class IosControlsDocumentLayerState extends DocumentLayoutLayerState<IosHandlesD
   bool get isCaretDisplayed => layoutData?.caret != null;
 
   @visibleForTesting
+  bool get isCaretVisible => _caretBlinkController.opacity == 1.0 && isCaretDisplayed;
+
+  @visibleForTesting
+  Duration get caretFlashPeriod => _caretBlinkController.flashPeriod;
+
+  @visibleForTesting
   bool get isUpstreamHandleDisplayed => layoutData?.upstream != null;
 
   @visibleForTesting
   bool get isDownstreamHandleDisplayed => layoutData?.downstream != null;
 
   void _onSelectionChange() {
+    _updateCaretFlash();
     setState(() {
       // Schedule a new layout computation because the caret and/or handles need to move.
     });
+  }
+
+  void _onDragChanged() {
+    setState(() {
+      // Schedule a new layout computation because we might need to hide/show the handle ball.
+    });
+  }
+
+  void _updateCaretFlash() {
+    _caretBlinkController.jumpToOpaque();
+    _startOrStopBlinking();
+  }
+
+  void _startOrStopBlinking() {
+    // TODO: allow a configurable policy as to whether to show the caret at all when the selection is expanded: https://github.com/superlistapp/super_editor/issues/234
+    final wantsToBlink = widget.selection.value != null && widget.shouldCaretBlink.value;
+    if (wantsToBlink && _caretBlinkController.isBlinking) {
+      return;
+    }
+    if (!wantsToBlink && !_caretBlinkController.isBlinking) {
+      return;
+    }
+
+    wantsToBlink //
+        ? _caretBlinkController.startBlinking()
+        : _caretBlinkController.stopBlinking();
   }
 
   void _onBlinkModeChange() {
@@ -640,26 +690,108 @@ class IosControlsDocumentLayerState extends DocumentLayoutLayerState<IosHandlesD
     }
   }
 
+  /// Computes a zero width `Rect` that represents the x and y offsets and the height
+  /// of the upstream or downstream handle in content space.
+  ///
+  /// The `Rect` returned by [DocumentLayout.getRectForPosition] doesn't match the
+  /// top and bottom of the selection hightlight box. This method computes an
+  /// expanded selection based on the given [position], computes the box for that
+  /// selection, and returns the edge of the selection box.
+  Rect _computeRectForExpandedHandle(DocumentPosition position) {
+    final component = widget.documentLayout.getComponentByNodeId(position.nodeId);
+    if (component == null) {
+      return Rect.zero;
+    }
+
+    // Check if we have a position to the right of the current position within the same node.
+    NodePosition? extentNodePosition = component.movePositionRight(position.nodePosition);
+    bool isExtentDownstream = extentNodePosition != null;
+
+    if (extentNodePosition == null) {
+      // Couldn't find a valid position to the right. Look for a position to the left
+      // of the current position within the same node.
+      extentNodePosition = component.movePositionLeft(position.nodePosition);
+    }
+
+    if (extentNodePosition == null) {
+      // We couldn't expand the selection neither to the left of the right. Fallback
+      // to rect for the position, which relies on Flutter's computation for the
+      // caret offset and height. Flutter's computation produces different offset
+      // a height from what is returned by the selection highlight box.
+      return widget.documentLayout.getRectForPosition(position)!;
+    }
+
+    final rectForSelection = widget.documentLayout.getRectForSelection(
+      position,
+      DocumentPosition(
+        nodeId: position.nodeId,
+        nodePosition: extentNodePosition,
+      ),
+    )!;
+
+    return Rect.fromLTWH(
+      isExtentDownstream ? rectForSelection.left : rectForSelection.right,
+      rectForSelection.top,
+      0,
+      rectForSelection.bottom - rectForSelection.top,
+    );
+  }
+
   @override
-  DocumentSelectionLayout? computeLayoutDataWithDocumentLayout(BuildContext context, DocumentLayout documentLayout) {
+  DocumentSelectionLayout? computeLayoutDataWithDocumentLayout(
+      BuildContext contentLayersContext, BuildContext documentContext, DocumentLayout documentLayout) {
     final selection = widget.selection.value;
     if (selection == null) {
       return null;
     }
 
+    if (widget.areSelectionHandlesAllowed?.value == false) {
+      /// We don't want to show any selection handles.
+      return null;
+    }
+
     if (selection.isCollapsed) {
+      Rect caretRect = documentLayout.getEdgeForPosition(selection.extent)!;
+
+      // Default caret width used by IOSCollapsedHandle.
+      const caretWidth = 2;
+
+      // Use the content's RenderBox instead of the layer's RenderBox to get the layer's width.
+      //
+      // ContentLayers works in four steps:
+      //
+      // 1. The content is built.
+      // 2. The content is laid out.
+      // 3. The layers are built.
+      // 4. The layers are laid out.
+      //
+      // The computeLayoutData method is called during the layer's build, which means that the
+      // layer's RenderBox is outdated, because it wasn't laid out yet for the current frame.
+      // Use the content's RenderBox, which was already laid out for the current frame.
+      final contentBox = documentContext.findRenderObject() as RenderSliver?;
+      if (contentBox != null && contentBox.hasSize && caretRect.left + caretWidth >= contentBox.size.width) {
+        // Ajust the caret position to make it entirely visible because it's currently placed
+        // partially or entirely outside of the layers' bounds. This can happen for downstream selections
+        // of block components that take all the available width.
+        caretRect = Rect.fromLTWH(
+          contentBox.size.width - caretWidth,
+          caretRect.top,
+          caretRect.width,
+          caretRect.height,
+        );
+      }
+
       return DocumentSelectionLayout(
-        // TODO: Replace "getRectForSelection()" with "getRectForPosition()" after #1614
-        caret: documentLayout.getRectForSelection(selection.extent, selection.extent)!,
+        caret: caretRect,
       );
     } else {
       return DocumentSelectionLayout(
-        upstream: documentLayout.getRectForPosition(
+        upstream: _computeRectForExpandedHandle(
           widget.document.selectUpstreamPosition(selection.base, selection.extent),
-        )!,
-        downstream: documentLayout.getRectForPosition(
+        ),
+        downstream: _computeRectForExpandedHandle(
           widget.document.selectDownstreamPosition(selection.base, selection.extent),
-        )!,
+        ),
         expandedSelectionBounds: documentLayout.getRectForSelection(
           selection.base,
           selection.extent,
@@ -686,6 +818,7 @@ class IosControlsDocumentLayerState extends DocumentLayoutLayerState<IosHandlesD
     }
 
     return Stack(
+      clipBehavior: Clip.none,
       children: [
         if (layoutData.caret != null) //
           _buildCollapsedHandle(caret: layoutData.caret!),
@@ -731,6 +864,7 @@ class IosControlsDocumentLayerState extends DocumentLayoutLayerState<IosHandlesD
             controller: _caretBlinkController,
             color: isShowingFloatingCursor ? Colors.grey : widget.handleColor,
             caretHeight: caret.height,
+            caretWidth: widget.caretWidth,
           );
         },
       ),
@@ -741,18 +875,25 @@ class IosControlsDocumentLayerState extends DocumentLayoutLayerState<IosHandlesD
     required Rect upstream,
     required Color debugColor,
   }) {
+    final shouldShowBall = widget.handleBeingDragged?.value != HandleType.upstream;
+    final ballRadius = shouldShowBall ? widget.handleBallDiameter / 2 : 0.0;
     return Positioned(
       key: _upstreamHandleKey,
       left: upstream.left,
-      top: upstream.top - ballDiameter,
+      // Move the handle up so the ball is above the selected area and add half
+      // of the radius to make the ball overlap the selected area.
+      top: upstream.top -
+          selectionHighlightBoxVerticalExpansion +
+          (shouldShowBall ? (ballRadius / 2) - widget.handleBallDiameter : 0.0),
       child: FractionalTranslation(
         translation: const Offset(-0.5, 0),
         child: IOSSelectionHandle.upstream(
           key: DocumentKeys.upstreamHandle,
           color: widget.handleColor,
           handleType: HandleType.upstream,
-          caretHeight: upstream.height,
-          ballRadius: ballDiameter / 2,
+          caretHeight: upstream.height + (selectionHighlightBoxVerticalExpansion * 2) - (ballRadius / 2),
+          caretWidth: widget.caretWidth,
+          ballRadius: ballRadius,
         ),
       ),
     );
@@ -762,18 +903,23 @@ class IosControlsDocumentLayerState extends DocumentLayoutLayerState<IosHandlesD
     required Rect downstream,
     required Color debugColor,
   }) {
+    final ballRadius = widget.handleBeingDragged?.value == HandleType.downstream //
+        ? 0.0
+        : widget.handleBallDiameter / 2;
+
     return Positioned(
       key: _downstreamHandleKey,
       left: downstream.left,
-      top: downstream.top,
+      top: downstream.top - selectionHighlightBoxVerticalExpansion,
       child: FractionalTranslation(
         translation: const Offset(-0.5, 0),
         child: IOSSelectionHandle.downstream(
           key: DocumentKeys.downstreamHandle,
           color: widget.handleColor,
           handleType: HandleType.downstream,
-          caretHeight: downstream.height,
-          ballRadius: ballDiameter / 2,
+          caretHeight: downstream.height + (selectionHighlightBoxVerticalExpansion * 2) - (ballRadius / 2),
+          caretWidth: widget.caretWidth,
+          ballRadius: ballRadius,
         ),
       ),
     );

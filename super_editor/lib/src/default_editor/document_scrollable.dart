@@ -1,8 +1,8 @@
 import 'dart:math';
 import 'dart:ui';
 
+import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
-import 'package:flutter/widgets.dart';
 import 'package:super_editor/src/infrastructure/_logging.dart';
 import 'package:super_editor/src/infrastructure/documents/document_scroller.dart';
 import 'package:super_editor/src/infrastructure/flutter/build_context.dart';
@@ -33,6 +33,7 @@ class DocumentScrollable extends StatefulWidget {
     this.scroller,
     this.scrollingMinimapId,
     this.showDebugPaint = false,
+    required this.shrinkWrap,
     required this.child,
   }) : super(key: key);
 
@@ -61,6 +62,10 @@ class DocumentScrollable extends StatefulWidget {
 
   /// This widget's child, which should include a document.
   final Widget child;
+
+  /// Whether to shrink wrap the [CustomScrollView] that's used to host
+  /// the editor content. Only used when there's no ancestor [Scrollable].
+  final bool shrinkWrap;
 
   @override
   State<DocumentScrollable> createState() => _DocumentScrollableState();
@@ -180,12 +185,14 @@ class _DocumentScrollableState extends State<DocumentScrollable> with SingleTick
   Widget build(BuildContext context) {
     final ancestorScrollable = context.findAncestorScrollableWithVerticalScroll;
     _ancestorScrollPosition = ancestorScrollable?.position;
-
+    if (ancestorScrollable != null) {
+      return widget.child;
+    }
     return Stack(
       children: [
-        _ancestorScrollPosition == null //
-            ? _buildScroller(child: widget.child) //
-            : widget.child,
+        _buildScroller(
+          child: widget.child,
+        ),
         if (widget.showDebugPaint)
           ..._buildScrollingDebugPaint(
             includesScrollView: ancestorScrollable == null,
@@ -198,6 +205,41 @@ class _DocumentScrollableState extends State<DocumentScrollable> with SingleTick
     required Widget child,
   }) {
     final scrollBehavior = ScrollConfiguration.of(context);
+    return _maybeBuildScrollbar(
+      behavior: scrollBehavior,
+      child: ScrollConfiguration(
+        behavior: scrollBehavior.copyWith(scrollbars: false),
+        child: CustomScrollView(
+          controller: _scrollController,
+          shrinkWrap: widget.shrinkWrap,
+          slivers: [child],
+        ),
+      ),
+    );
+  }
+
+  Widget _maybeBuildScrollbar({
+    required ScrollBehavior behavior,
+    required Widget child,
+  }) {
+    // We allow apps to prevent the custom scrollbar from being added by
+    // wrapping the editor with a `ScrollConfiguration` configured to not
+    // display scrollbars. However, at this moment we can't query this
+    // information from the BuildContext. As a workaround, we check whether
+    // or not the buildScrollbar method returns a ScrollBar. If it doesn't,
+    // this means the app doesn't want us to add our own ScrollBar.
+    //
+    // Change this after https://github.com/flutter/flutter/issues/141508 is solved.
+    final maybeScrollBar = behavior.buildScrollbar(
+      context,
+      child,
+      ScrollableDetails.vertical(controller: _scrollController),
+    );
+    if (maybeScrollBar == child) {
+      // The scroll behavior is configured to NOT show scrollbars.
+      return child;
+    }
+
     // As we handle the scrolling gestures ourselves,
     // we use NeverScrollableScrollPhysics to prevent SingleChildScrollView
     // from scrolling. This also prevents the user from interacting
@@ -208,15 +250,8 @@ class _DocumentScrollableState extends State<DocumentScrollable> with SingleTick
     // See https://github.com/superlistapp/super_editor/issues/1628 for more details.
     return ScrollbarWithCustomPhysics(
       controller: _scrollController,
-      physics: scrollBehavior.getScrollPhysics(context),
-      child: ScrollConfiguration(
-        behavior: scrollBehavior.copyWith(scrollbars: false),
-        child: SingleChildScrollView(
-          controller: _scrollController,
-          physics: const NeverScrollableScrollPhysics(),
-          child: child,
-        ),
-      ),
+      physics: behavior.getScrollPhysics(context),
+      child: child,
     );
   }
 
@@ -350,7 +385,14 @@ class AutoScrollController with ChangeNotifier {
     // The scroll position changed. Probably because the position scrolled
     // up or down. Notify our listeners so that they can adjust the document
     // selection bounds or other related properties.
-    notifyListeners();
+    //
+    // The scroll position may trigger layout changes, notify the listeners
+    // after the layout settles.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (hasScrollable) {
+        notifyListeners();
+      }
+    });
   }
 
   /// Stops controlling a [Scrollable] that was attached with [attachScrollable].

@@ -1,6 +1,26 @@
+import 'package:attributed_text/attributed_text.dart';
+import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:super_editor/super_editor.dart';
+import 'package:super_editor/src/core/document.dart';
+import 'package:super_editor/src/core/document_composer.dart';
+import 'package:super_editor/src/core/document_layout.dart';
+import 'package:super_editor/src/core/document_selection.dart';
+import 'package:super_editor/src/core/edit_context.dart';
+import 'package:super_editor/src/core/editor.dart';
+import 'package:super_editor/src/core/styles.dart';
+import 'package:super_editor/src/default_editor/blocks/indentation.dart';
+import 'package:super_editor/src/default_editor/multi_node_editing.dart';
+import 'package:super_editor/src/default_editor/paragraph.dart';
+import 'package:super_editor/src/default_editor/text.dart';
+import 'package:super_editor/src/infrastructure/_logging.dart';
+import 'package:super_editor/src/infrastructure/attributed_text_styles.dart';
+import 'package:super_editor/src/infrastructure/composable_text.dart';
+import 'package:super_editor/src/infrastructure/keyboard.dart';
+import 'package:super_text_layout/super_text_layout.dart';
+
+import 'attributions.dart';
+import 'layout_single_column/layout_single_column.dart';
 
 /// This file includes everything needed to add the concept of a task
 /// to Super Editor. This includes:
@@ -16,43 +36,104 @@ import 'package:super_editor/super_editor.dart';
 /// [DocumentNode] that represents a task to complete.
 ///
 /// A task can either be complete, or incomplete.
+@immutable
 class TaskNode extends TextNode {
   TaskNode({
-    required String id,
-    required AttributedText text,
-    Map<String, dynamic>? metadata,
-    required bool isComplete,
-  })  : _isComplete = isComplete,
-        super(id: id, text: text, metadata: metadata) {
+    required super.id,
+    required super.text,
+    super.metadata,
+    required this.isComplete,
+    this.indent = 0,
+  }) {
     // Set a block type so that TaskNode's can be styled by
     // StyleRule's.
-    putMetadataValue("blockType", const NamedAttribution("task"));
+    initAddToMetadata({"blockType": const NamedAttribution("task")});
   }
 
   /// Whether this task is complete.
-  bool get isComplete => _isComplete;
-  bool _isComplete;
-  set isComplete(bool newValue) {
-    if (newValue == _isComplete) {
-      return;
-    }
+  final bool isComplete;
 
-    _isComplete = newValue;
-    notifyListeners();
-  }
+  /// The indent level of this task - `0` is no indent.
+  ///
+  /// A task can only be indented one level beyond its parent task.
+  final int indent;
 
   @override
   bool hasEquivalentContent(DocumentNode other) {
     return other is TaskNode && isComplete == other.isComplete && text == other.text;
   }
 
+  TaskNode copyTaskWith({
+    String? id,
+    AttributedText? text,
+    Map<String, dynamic>? metadata,
+    bool? isComplete,
+    int? indent,
+  }) {
+    return TaskNode(
+      id: id ?? this.id,
+      text: text ?? this.text,
+      metadata: metadata ?? this.metadata,
+      isComplete: isComplete ?? this.isComplete,
+      indent: indent ?? this.indent,
+    );
+  }
+
+  @override
+  TaskNode copyTextNodeWith({
+    String? id,
+    AttributedText? text,
+    Map<String, dynamic>? metadata,
+  }) {
+    return copyTaskWith(
+      id: id,
+      text: text,
+      metadata: metadata,
+    );
+  }
+
+  @override
+  TaskNode copyAndReplaceMetadata(Map<String, dynamic> newMetadata) {
+    return copyTaskWith(
+      metadata: newMetadata,
+    );
+  }
+
+  @override
+  TaskNode copyWithAddedMetadata(Map<String, dynamic> newProperties) {
+    return copyTaskWith(
+      metadata: {
+        ...metadata,
+        ...newProperties,
+      },
+    );
+  }
+
+  @override
+  TaskNode copy() {
+    return TaskNode(
+      id: id,
+      text: text.copyText(0),
+      metadata: Map.from(metadata),
+      isComplete: isComplete,
+    );
+  }
+
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      super == other && other is TaskNode && runtimeType == other.runtimeType && isComplete == other.isComplete;
+      super == other &&
+          other is TaskNode &&
+          runtimeType == other.runtimeType &&
+          isComplete == other.isComplete &&
+          indent == other.indent;
 
   @override
-  int get hashCode => super.hashCode ^ isComplete.hashCode;
+  int get hashCode => super.hashCode ^ isComplete.hashCode ^ indent.hashCode;
+}
+
+extension TaskNodeType on DocumentNode {
+  TaskNode get asTask => this as TaskNode;
 }
 
 /// Styles all task components to apply top padding
@@ -85,6 +166,7 @@ class TaskComponentBuilder implements ComponentBuilder {
     return TaskComponentViewModel(
       nodeId: node.id,
       padding: EdgeInsets.zero,
+      indent: node.indent,
       isComplete: node.isComplete,
       setComplete: (bool isComplete) {
         _editor.execute([
@@ -125,18 +207,37 @@ class TaskComponentViewModel extends SingleColumnLayoutComponentViewModel with T
     required String nodeId,
     double? maxWidth,
     required EdgeInsetsGeometry padding,
+    this.indent = 0,
+    this.indentCalculator = defaultTaskIndentCalculator,
     required this.isComplete,
     required this.setComplete,
     required this.text,
     required this.textStyleBuilder,
+    this.inlineWidgetBuilders = const [],
     this.textDirection = TextDirection.ltr,
     this.textAlignment = TextAlign.left,
     this.selection,
     required this.selectionColor,
     this.highlightWhenEmpty = false,
-    this.composingRegion,
-    this.showComposingUnderline = false,
-  }) : super(nodeId: nodeId, maxWidth: maxWidth, padding: padding);
+    TextRange? composingRegion,
+    bool showComposingRegionUnderline = false,
+    UnderlineStyle spellingErrorUnderlineStyle = const SquiggleUnderlineStyle(color: Colors.red),
+    List<TextRange> spellingErrors = const <TextRange>[],
+    UnderlineStyle grammarErrorUnderlineStyle = const SquiggleUnderlineStyle(color: Colors.blue),
+    List<TextRange> grammarErrors = const <TextRange>[],
+  }) : super(nodeId: nodeId, maxWidth: maxWidth, padding: padding) {
+    this.composingRegion = composingRegion;
+    this.showComposingRegionUnderline = showComposingRegionUnderline;
+
+    this.spellingErrorUnderlineStyle = spellingErrorUnderlineStyle;
+    this.spellingErrors = spellingErrors;
+
+    this.grammarErrorUnderlineStyle = grammarErrorUnderlineStyle;
+    this.grammarErrors = grammarErrors;
+  }
+
+  int indent;
+  TextBlockIndentCalculator indentCalculator;
 
   bool isComplete;
   void Function(bool) setComplete;
@@ -145,6 +246,8 @@ class TaskComponentViewModel extends SingleColumnLayoutComponentViewModel with T
   AttributedText text;
   @override
   AttributionStyleBuilder textStyleBuilder;
+  @override
+  InlineWidgetBuilderChain inlineWidgetBuilders;
   @override
   TextDirection textDirection;
   @override
@@ -155,10 +258,6 @@ class TaskComponentViewModel extends SingleColumnLayoutComponentViewModel with T
   Color selectionColor;
   @override
   bool highlightWhenEmpty;
-  @override
-  TextRange? composingRegion;
-  @override
-  bool showComposingUnderline;
 
   @override
   TaskComponentViewModel copy() {
@@ -166,16 +265,23 @@ class TaskComponentViewModel extends SingleColumnLayoutComponentViewModel with T
       nodeId: nodeId,
       maxWidth: maxWidth,
       padding: padding,
+      indent: indent,
+      indentCalculator: indentCalculator,
       isComplete: isComplete,
       setComplete: setComplete,
       text: text,
       textStyleBuilder: textStyleBuilder,
+      inlineWidgetBuilders: inlineWidgetBuilders,
       textDirection: textDirection,
       selection: selection,
       selectionColor: selectionColor,
       highlightWhenEmpty: highlightWhenEmpty,
+      spellingErrorUnderlineStyle: spellingErrorUnderlineStyle,
+      spellingErrors: List.from(spellingErrors),
+      grammarErrorUnderlineStyle: grammarErrorUnderlineStyle,
+      grammarErrors: List.from(grammarErrors),
       composingRegion: composingRegion,
-      showComposingUnderline: showComposingUnderline,
+      showComposingRegionUnderline: showComposingRegionUnderline,
     );
   }
 
@@ -185,30 +291,43 @@ class TaskComponentViewModel extends SingleColumnLayoutComponentViewModel with T
       super == other &&
           other is TaskComponentViewModel &&
           runtimeType == other.runtimeType &&
+          indent == other.indent &&
           isComplete == other.isComplete &&
-          setComplete == other.setComplete &&
           text == other.text &&
           textDirection == other.textDirection &&
           textAlignment == other.textAlignment &&
           selection == other.selection &&
           selectionColor == other.selectionColor &&
           highlightWhenEmpty == other.highlightWhenEmpty &&
+          spellingErrorUnderlineStyle == other.spellingErrorUnderlineStyle &&
+          const DeepCollectionEquality().equals(spellingErrors, other.spellingErrors) &&
+          grammarErrorUnderlineStyle == other.grammarErrorUnderlineStyle &&
+          const DeepCollectionEquality().equals(grammarErrors, other.grammarErrors) &&
           composingRegion == other.composingRegion &&
-          showComposingUnderline == other.showComposingUnderline;
+          showComposingRegionUnderline == other.showComposingRegionUnderline;
 
   @override
   int get hashCode =>
       super.hashCode ^
+      indent.hashCode ^
       isComplete.hashCode ^
-      setComplete.hashCode ^
       text.hashCode ^
       textDirection.hashCode ^
       textAlignment.hashCode ^
       selection.hashCode ^
       selectionColor.hashCode ^
       highlightWhenEmpty.hashCode ^
+      spellingErrorUnderlineStyle.hashCode ^
+      spellingErrors.hashCode ^
+      grammarErrorUnderlineStyle.hashCode ^
+      grammarErrors.hashCode ^
       composingRegion.hashCode ^
-      showComposingUnderline.hashCode;
+      showComposingRegionUnderline.hashCode;
+}
+
+/// The standard [TextBlockIndentCalculator] used by tasks in `SuperEditor`.
+double defaultTaskIndentCalculator(TextStyle textStyle, int indent) {
+  return (textStyle.fontSize! * 0.60) * 4 * indent;
 }
 
 /// A document component that displays a complete-able task.
@@ -260,9 +379,16 @@ class _TaskComponentState extends State<TaskComponent> with ProxyDocumentCompone
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        SizedBox(
+          width: widget.viewModel.indentCalculator(
+            widget.viewModel.textStyleBuilder({}),
+            widget.viewModel.indent,
+          ),
+        ),
         Padding(
           padding: const EdgeInsets.only(left: 16, right: 4),
           child: Checkbox(
+            visualDensity: Theme.of(context).visualDensity,
             value: widget.viewModel.isComplete,
             onChanged: (newValue) {
               widget.viewModel.setComplete(newValue!);
@@ -274,11 +400,11 @@ class _TaskComponentState extends State<TaskComponent> with ProxyDocumentCompone
             key: _textKey,
             text: widget.viewModel.text,
             textStyleBuilder: _computeStyles,
+            inlineWidgetBuilders: widget.viewModel.inlineWidgetBuilders,
             textSelection: widget.viewModel.selection,
             selectionColor: widget.viewModel.selectionColor,
             highlightWhenEmpty: widget.viewModel.highlightWhenEmpty,
-            composingRegion: widget.viewModel.composingRegion,
-            showComposingUnderline: widget.viewModel.showComposingUnderline,
+            underlines: widget.viewModel.createUnderlines(),
             showDebugPaint: widget.showDebugPaint,
           ),
         ),
@@ -312,13 +438,8 @@ ExecutionInstruction enterToInsertNewTask({
     return ExecutionInstruction.continueExecution;
   }
 
-  final splitOffset = (selection.extent.nodePosition as TextNodePosition).offset;
-
   editContext.editor.execute([
-    SplitExistingTaskRequest(
-      existingNodeId: node.id,
-      splitOffset: splitOffset,
-    ),
+    InsertNewlineAtCaretRequest(Editor.createNodeId()),
   ]);
 
   return ExecutionInstruction.haltExecution;
@@ -360,6 +481,209 @@ ExecutionInstruction backspaceToConvertTaskToParagraph({
   return ExecutionInstruction.haltExecution;
 }
 
+ExecutionInstruction tabToIndentTask({
+  required SuperEditorContext editContext,
+  required KeyEvent keyEvent,
+}) {
+  if (keyEvent is! KeyDownEvent && keyEvent is! KeyRepeatEvent) {
+    return ExecutionInstruction.continueExecution;
+  }
+
+  if (keyEvent.logicalKey != LogicalKeyboardKey.tab) {
+    return ExecutionInstruction.continueExecution;
+  }
+
+  if (HardwareKeyboard.instance.isShiftPressed) {
+    // Don't indent if Shift is pressed - that's for un-indenting.
+    return ExecutionInstruction.continueExecution;
+  }
+
+  final selection = editContext.composer.selection;
+  if (selection == null) {
+    return ExecutionInstruction.continueExecution;
+  }
+
+  if (selection.base.nodeId != selection.extent.nodeId) {
+    // Selection spans nodes, so even if this selection includes a task,
+    // it includes other stuff, too. So we can't treat this as a task indentation.
+    return ExecutionInstruction.continueExecution;
+  }
+
+  final node = editContext.document.getNodeById(editContext.composer.selection!.extent.nodeId);
+  if (node is! TaskNode) {
+    return ExecutionInstruction.continueExecution;
+  }
+
+  final taskAbove = editContext.document.getNodeBefore(node);
+  if (taskAbove == null) {
+    // No task above us, so we can't indent.
+    return ExecutionInstruction.continueExecution;
+  }
+  if (taskAbove is! TaskNode) {
+    // The node above isn't a task. We can't indent.
+    return ExecutionInstruction.continueExecution;
+  }
+
+  final maxIndent = taskAbove.indent + 1;
+  if (node.indent >= maxIndent) {
+    // Can't indent any further.
+    return ExecutionInstruction.continueExecution;
+  }
+
+  editContext.editor.execute([
+    IndentTaskRequest(node.id),
+  ]);
+
+  return ExecutionInstruction.haltExecution;
+}
+
+ExecutionInstruction shiftTabToUnIndentTask({
+  required SuperEditorContext editContext,
+  required KeyEvent keyEvent,
+}) {
+  if (keyEvent is! KeyDownEvent && keyEvent is! KeyRepeatEvent) {
+    return ExecutionInstruction.continueExecution;
+  }
+
+  if (keyEvent.logicalKey != LogicalKeyboardKey.tab) {
+    return ExecutionInstruction.continueExecution;
+  }
+  if (!HardwareKeyboard.instance.isShiftPressed) {
+    return ExecutionInstruction.continueExecution;
+  }
+
+  final selection = editContext.composer.selection;
+  if (selection == null) {
+    return ExecutionInstruction.continueExecution;
+  }
+
+  if (selection.base.nodeId != selection.extent.nodeId) {
+    // Selection spans nodes, so even if this selection includes a task,
+    // it includes other stuff, too. So we can't treat this as a task indentation.
+    return ExecutionInstruction.continueExecution;
+  }
+
+  final node = editContext.document.getNodeById(editContext.composer.selection!.extent.nodeId);
+  if (node is! TaskNode) {
+    return ExecutionInstruction.continueExecution;
+  }
+
+  if (node.indent == 0) {
+    // Can't un-indent any further.
+    return ExecutionInstruction.continueExecution;
+  }
+
+  editContext.editor.execute([
+    UnIndentTaskRequest(node.id),
+  ]);
+
+  return ExecutionInstruction.haltExecution;
+}
+
+ExecutionInstruction backspaceToUnIndentTask({
+  required SuperEditorContext editContext,
+  required KeyEvent keyEvent,
+}) {
+  if (keyEvent is! KeyDownEvent && keyEvent is! KeyRepeatEvent) {
+    return ExecutionInstruction.continueExecution;
+  }
+
+  if (keyEvent.logicalKey != LogicalKeyboardKey.backspace) {
+    return ExecutionInstruction.continueExecution;
+  }
+
+  final selection = editContext.composer.selection;
+  if (selection == null) {
+    return ExecutionInstruction.continueExecution;
+  }
+
+  if (selection.base.nodeId != selection.extent.nodeId) {
+    // Selection spans nodes, so even if this selection includes a task,
+    // it includes other stuff, too. So we can't treat this as a task indentation.
+    return ExecutionInstruction.continueExecution;
+  }
+
+  final node = editContext.document.getNodeById(editContext.composer.selection!.extent.nodeId);
+  if (node is! TaskNode) {
+    return ExecutionInstruction.continueExecution;
+  }
+  if ((editContext.composer.selection!.extent.nodePosition as TextPosition).offset > 0) {
+    // Backspace should only un-indent if the caret is at the start of the text.
+    return ExecutionInstruction.continueExecution;
+  }
+
+  if (node.indent == 0) {
+    // Can't un-indent any further.
+    return ExecutionInstruction.continueExecution;
+  }
+
+  editContext.editor.execute([
+    UnIndentTaskRequest(node.id),
+  ]);
+
+  return ExecutionInstruction.haltExecution;
+}
+
+/// An [EditCommand] that inserts a newline when the caret sits within a [TaskNode].
+///
+/// This command adds the following behaviors beyond the usual:
+///  * When the caret is in the middle of a task, splits the task into two tasks.
+///
+///  * When the caret is at the end of a task, inserts a new empty task, instead of an
+///    empty paragraph.
+///
+///  * Inserting a newline into an empty task converts it into a paragraph instead of
+///    inserting a new task.
+class InsertNewlineInTaskAtCaretCommand extends BaseInsertNewlineAtCaretCommand {
+  const InsertNewlineInTaskAtCaretCommand(this.newNodeId);
+
+  /// {@macro newNodeId}
+  final String newNodeId;
+
+  @override
+  void doInsertNewline(
+    EditContext context,
+    CommandExecutor executor,
+    DocumentPosition caretPosition,
+    NodePosition caretNodePosition,
+  ) {
+    final node = context.document.getNodeById(caretPosition.nodeId);
+    if (caretNodePosition is! TextNodePosition || node is! TaskNode) {
+      // We don't know how to deal with this kind of node.
+      return;
+    }
+
+    if (node.text.isEmpty) {
+      // The task is empty. Convert it to a paragraph.
+      executor.executeCommand(
+        ConvertTaskToParagraphCommand(nodeId: node.id),
+      );
+      return;
+    }
+
+    executor
+      ..executeCommand(
+        SplitExistingTaskCommand(
+          nodeId: node.id,
+          splitOffset: caretNodePosition.offset,
+          newNodeId: newNodeId,
+        ),
+      )
+      ..executeCommand(
+        ChangeSelectionCommand(
+          DocumentSelection.collapsed(
+            position: DocumentPosition(
+              nodeId: newNodeId,
+              nodePosition: const TextNodePosition(offset: 0),
+            ),
+          ),
+          SelectionChangeType.insertContent,
+          SelectionReason.userInteraction,
+        ),
+      );
+  }
+}
+
 class ChangeTaskCompletionRequest implements EditRequest {
   ChangeTaskCompletionRequest({required this.nodeId, required this.isComplete});
 
@@ -378,20 +702,26 @@ class ChangeTaskCompletionRequest implements EditRequest {
   int get hashCode => nodeId.hashCode ^ isComplete.hashCode;
 }
 
-class ChangeTaskCompletionCommand implements EditCommand {
+class ChangeTaskCompletionCommand extends EditCommand {
   ChangeTaskCompletionCommand({required this.nodeId, required this.isComplete});
 
   final String nodeId;
   final bool isComplete;
 
   @override
+  HistoryBehavior get historyBehavior => HistoryBehavior.undoable;
+
+  @override
   void execute(EditContext context, CommandExecutor executor) {
-    final taskNode = context.find<MutableDocument>(Editor.documentKey).getNodeById(nodeId);
+    final taskNode = context.document.getNodeById(nodeId);
     if (taskNode is! TaskNode) {
       return;
     }
 
-    taskNode.isComplete = isComplete;
+    context.document.replaceNodeById(
+      taskNode.id,
+      taskNode.copyTaskWith(isComplete: isComplete),
+    );
 
     executor.logChanges([
       DocumentEdit(
@@ -422,7 +752,7 @@ class ConvertParagraphToTaskRequest implements EditRequest {
   int get hashCode => nodeId.hashCode ^ isComplete.hashCode;
 }
 
-class ConvertParagraphToTaskCommand implements EditCommand {
+class ConvertParagraphToTaskCommand extends EditCommand {
   const ConvertParagraphToTaskCommand({
     required this.nodeId,
     this.isComplete = false,
@@ -432,8 +762,11 @@ class ConvertParagraphToTaskCommand implements EditCommand {
   final bool isComplete;
 
   @override
+  HistoryBehavior get historyBehavior => HistoryBehavior.undoable;
+
+  @override
   void execute(EditContext context, CommandExecutor executor) {
-    final document = context.find<MutableDocument>(Editor.documentKey);
+    final document = context.document;
     final existingNode = document.getNodeById(nodeId);
     if (existingNode is! ParagraphNode) {
       editorOpsLog.warning(
@@ -444,7 +777,7 @@ class ConvertParagraphToTaskCommand implements EditCommand {
     final taskNode = TaskNode(
       id: existingNode.id,
       text: existingNode.text,
-      isComplete: false,
+      isComplete: isComplete,
     );
 
     executor.executeCommand(
@@ -453,7 +786,28 @@ class ConvertParagraphToTaskCommand implements EditCommand {
   }
 }
 
-class ConvertTaskToParagraphCommand implements EditCommand {
+class ConvertTaskToParagraphRequest implements EditRequest {
+  const ConvertTaskToParagraphRequest({
+    required this.nodeId,
+    this.paragraphMetadata,
+  });
+
+  final String nodeId;
+  final Map<String, dynamic>? paragraphMetadata;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ConvertTaskToParagraphRequest &&
+          runtimeType == other.runtimeType &&
+          nodeId == other.nodeId &&
+          paragraphMetadata == other.paragraphMetadata;
+
+  @override
+  int get hashCode => nodeId.hashCode ^ paragraphMetadata.hashCode;
+}
+
+class ConvertTaskToParagraphCommand extends EditCommand {
   const ConvertTaskToParagraphCommand({
     required this.nodeId,
     this.paragraphMetadata,
@@ -463,8 +817,11 @@ class ConvertTaskToParagraphCommand implements EditCommand {
   final Map<String, dynamic>? paragraphMetadata;
 
   @override
+  HistoryBehavior get historyBehavior => HistoryBehavior.undoable;
+
+  @override
   void execute(EditContext context, CommandExecutor executor) {
-    final document = context.find<MutableDocument>(Editor.documentKey);
+    final document = context.document;
     final node = document.getNodeById(nodeId);
     final taskNode = node as TaskNode;
     final newMetadata = Map<String, dynamic>.from(paragraphMetadata ?? {});
@@ -475,7 +832,7 @@ class ConvertTaskToParagraphCommand implements EditCommand {
       text: taskNode.text,
       metadata: newMetadata,
     );
-    document.replaceNode(oldNode: taskNode, newNode: newParagraphNode);
+    document.replaceNodeById(taskNode.id, newParagraphNode);
 
     executor.logChanges([
       DocumentEdit(
@@ -497,7 +854,7 @@ class SplitExistingTaskRequest implements EditRequest {
   final String? newNodeId;
 }
 
-class SplitExistingTaskCommand implements EditCommand {
+class SplitExistingTaskCommand extends EditCommand {
   const SplitExistingTaskCommand({
     required this.nodeId,
     required this.splitOffset,
@@ -509,8 +866,11 @@ class SplitExistingTaskCommand implements EditCommand {
   final String? newNodeId;
 
   @override
+  HistoryBehavior get historyBehavior => HistoryBehavior.undoable;
+
+  @override
   void execute(EditContext editContext, CommandExecutor executor) {
-    final document = editContext.find<MutableDocument>(Editor.documentKey);
+    final document = editContext.document;
     final composer = editContext.find<MutableDocumentComposer>(Editor.composerKey);
     final selection = composer.selection;
 
@@ -526,7 +886,7 @@ class SplitExistingTaskCommand implements EditCommand {
     }
 
     // Ensure the split offset is valid.
-    if (splitOffset < 0 || splitOffset > node.text.text.length + 1) {
+    if (splitOffset < 0 || splitOffset > node.text.length + 1) {
       return;
     }
 
@@ -537,10 +897,13 @@ class SplitExistingTaskCommand implements EditCommand {
     );
 
     // Remove the text after the caret from the currently selected TaskNode.
-    node.text = node.text.removeRegion(startOffset: splitOffset, endOffset: node.text.text.length);
+    final updatedNode = node.copyTextNodeWith(
+      text: node.text.removeRegion(startOffset: splitOffset, endOffset: node.text.length),
+    );
+    document.replaceNodeById(node.id, updatedNode);
 
     // Insert a new TextNode after the currently selected TaskNode.
-    document.insertNodeAfter(existingNode: node, newNode: newTaskNode);
+    document.insertNodeAfter(existingNodeId: updatedNode.id, newNode: newTaskNode);
 
     // Move the caret to the beginning of the new TaskNode.
     final oldSelection = composer.selection;
@@ -582,4 +945,220 @@ class SplitTaskIntention extends Intention {
   SplitTaskIntention.start() : super.start();
 
   SplitTaskIntention.end() : super.end();
+}
+
+class IndentTaskRequest implements EditRequest {
+  const IndentTaskRequest(this.nodeId);
+
+  final String nodeId;
+}
+
+class IndentTaskCommand extends EditCommand {
+  const IndentTaskCommand(this.nodeId);
+
+  final String nodeId;
+
+  @override
+  void execute(EditContext context, CommandExecutor executor) {
+    final document = context.document;
+
+    final task = document.getNodeById(nodeId);
+    if (task is! TaskNode) {
+      // The specified node isn't a task. Nothing for us to indent.
+      return;
+    }
+
+    final taskAbove = document.getNodeBefore(task);
+    if (taskAbove is! TaskNode) {
+      // There's no task above this task, therefore it can't be indented.
+      return;
+    }
+
+    final maxIndent = taskAbove.indent + 1;
+    if (task.indent >= maxIndent) {
+      // This task is already at max indentation.
+      return;
+    }
+
+    // Increase the task indentation.
+    document.replaceNodeById(
+      task.id,
+      task.copyTaskWith(indent: task.indent + 1),
+    );
+
+    executor.logChanges([
+      DocumentEdit(
+        NodeChangeEvent(task.id),
+      ),
+    ]);
+  }
+}
+
+class UnIndentTaskRequest implements EditRequest {
+  const UnIndentTaskRequest(this.nodeId);
+
+  final String nodeId;
+}
+
+class UnIndentTaskCommand extends EditCommand {
+  const UnIndentTaskCommand(this.nodeId);
+
+  final String nodeId;
+
+  @override
+  void execute(EditContext context, CommandExecutor executor) {
+    final document = context.document;
+
+    final task = document.getNodeById(nodeId);
+    if (task is! TaskNode) {
+      // The specified node isn't a task. Nothing for us to indent.
+      return;
+    }
+
+    if (task.indent == 0) {
+      // This task is already at minimum indent. Nothing to do.
+      return;
+    }
+
+    final subTasks = <TaskNode>[];
+    var nextNode = document.getNodeAfter(task);
+    while (nextNode != null) {
+      final subTask = nextNode;
+      if (subTask is! TaskNode) {
+        break;
+      }
+      if (subTask.indent <= task.indent) {
+        break;
+      }
+
+      subTasks.add(subTask);
+      nextNode = document.getNodeAfter(nextNode);
+    }
+
+    final changeLog = <DocumentEdit>[];
+
+    // Decrease the task indentation of the desired task.
+    document.replaceNodeById(
+      task.id,
+      task.copyTaskWith(indent: task.indent - 1),
+    );
+
+    changeLog.add(
+      DocumentEdit(
+        NodeChangeEvent(task.id),
+      ),
+    );
+
+    // Decrease the indentation of the sub-tasks.
+    for (final subTask in subTasks) {
+      document.replaceNodeById(
+        subTask.id,
+        subTask.copyTaskWith(indent: subTask.indent - 1),
+      );
+
+      changeLog.add(
+        DocumentEdit(
+          NodeChangeEvent(subTask.id),
+        ),
+      );
+    }
+
+    // Log all changes.
+    executor.logChanges(changeLog);
+  }
+}
+
+/// Sets the indent of the task with ID [nodeId] to the given [indent].
+///
+/// This request doesn't verify any rules about allowed indentation
+/// levels. It blindly applies the indent. Therefore, this request should
+/// only be issued from places that have already validated the result.
+class SetTaskIndentRequest implements EditRequest {
+  const SetTaskIndentRequest(this.nodeId, this.indent);
+
+  final String nodeId;
+  final int indent;
+}
+
+class SetTaskIndentCommand extends EditCommand {
+  const SetTaskIndentCommand(this.nodeId, this.indent);
+
+  final String nodeId;
+  final int indent;
+
+  @override
+  void execute(EditContext context, CommandExecutor executor) {
+    final document = context.document;
+
+    final task = document.getNodeById(nodeId);
+    if (task is! TaskNode) {
+      // The specified node isn't a task. Nothing for us to indent.
+      return;
+    }
+
+    document.replaceNodeById(
+      task.id,
+      task.copyTaskWith(indent: indent),
+    );
+
+    executor.logChanges([
+      DocumentEdit(
+        NodeChangeEvent(task.id),
+      ),
+    ]);
+  }
+}
+
+class UpdateSubTaskIndentAfterTaskDeletionReaction extends EditReaction {
+  @override
+  void modifyContent(EditContext editorContext, RequestDispatcher requestDispatcher, List<EditEvent> changeList) {
+    final didDeleteTask = changeList
+        .whereType<DocumentEdit>()
+        .where((edit) => edit.change is NodeRemovedEvent && (edit.change as NodeRemovedEvent).removedNode is TaskNode)
+        .isNotEmpty;
+    if (!didDeleteTask) {
+      // No tasks were deleted, so there are no task indentations to fix.
+      return;
+    }
+
+    // At least one task was deleted. We're not sure where in the document the
+    // tasks were before being deleted. Therefore, we check and fix every task
+    // indentation in the document.
+    final document = editorContext.document;
+    final changeIndentationRequests = <EditRequest>[];
+    int maxIndentation = 0;
+    for (final node in document) {
+      if (node is! TaskNode) {
+        // This node isn't a task. The first task in a list of tasks
+        // can't have an indent, so reset the max indent back to zero.
+        maxIndentation = 0;
+        continue;
+      }
+
+      if (node.indent > maxIndentation) {
+        // This task has an indent that's too deep. Fix it by
+        // settings its indent to the max allowed.
+        changeIndentationRequests.add(
+          SetTaskIndentRequest(node.id, maxIndentation),
+        );
+
+        // A task that follows this one is allowed (up to) the previous
+        // max + 1.
+        maxIndentation += 1;
+        continue;
+      }
+
+      // This is a task with a legitimate indent. Update the
+      // max indent tracker based on this task's level.
+      maxIndentation = node.indent + 1;
+    }
+
+    if (changeIndentationRequests.isEmpty) {
+      // No changes needed.
+      return;
+    }
+
+    // Adjust all tasks with illegal indentations.
+    requestDispatcher.execute(changeIndentationRequests);
+  }
 }

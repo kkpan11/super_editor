@@ -14,7 +14,7 @@ class MobileEditingIOSDemo extends StatefulWidget {
   State<MobileEditingIOSDemo> createState() => _MobileEditingIOSDemoState();
 }
 
-class _MobileEditingIOSDemoState extends State<MobileEditingIOSDemo> {
+class _MobileEditingIOSDemoState extends State<MobileEditingIOSDemo> with SingleTickerProviderStateMixin {
   final GlobalKey _docLayoutKey = GlobalKey();
 
   late MutableDocument _doc;
@@ -98,8 +98,6 @@ class _MobileEditingIOSDemoState extends State<MobileEditingIOSDemo> {
                 focusNode: _editorFocusNode,
                 documentLayoutKey: _docLayoutKey,
                 editor: _docEditor,
-                document: _doc,
-                composer: _composer,
                 gestureMode: DocumentGestureMode.iOS,
                 inputSource: TextInputSource.ime,
                 selectionLayerLinks: _selectionLayerLinks,
@@ -133,12 +131,16 @@ class _MobileEditingIOSDemoState extends State<MobileEditingIOSDemo> {
     );
   }
 
-  Widget _buildIosMagnifier(BuildContext context, Key magnifierKey, LeaderLink focalPoint) {
+  Widget _buildIosMagnifier(BuildContext context, Key magnifierKey, LeaderLink focalPoint, bool isVisible) {
     return Center(
       child: IOSFollowingMagnifier.roundedRectangle(
         magnifierKey: magnifierKey,
         leaderLink: focalPoint,
-        offsetFromFocalPoint: const Offset(0, -72),
+        // The magnifier is centered with the focal point. Translate it so that it sits
+        // above the focal point and leave a few pixels between the bottom of the magnifier
+        // and the focal point. This value was chosen empirically.
+        offsetFromFocalPoint: Offset(0, (-defaultIosMagnifierSize.height / 2) - 20),
+        show: isVisible,
       ),
     );
   }
@@ -197,7 +199,7 @@ class _MobileEditingIOSDemoState extends State<MobileEditingIOSDemo> {
               borderRadius: BorderRadius.circular(8),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.2),
+                  color: Colors.black.withValues(alpha: 0.2),
                   blurRadius: 5,
                   offset: const Offset(0, 3),
                 ),

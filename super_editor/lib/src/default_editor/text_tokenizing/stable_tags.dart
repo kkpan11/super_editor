@@ -62,10 +62,10 @@ class StableTagPlugin extends SuperEditorPlugin {
   })  : _tagRule = tagRule,
         tagIndex = StableTagIndex() {
     _requestHandlers = <EditRequestHandler>[
-      (request) => request is FillInComposingStableTagRequest
+      (editor, request) => request is FillInComposingStableTagRequest
           ? FillInComposingUserTagCommand(request.tag, request.tagRule)
           : null,
-      (request) => request is CancelComposingStableTagRequest //
+      (editor, request) => request is CancelComposingStableTagRequest //
           ? CancelComposingStableTagCommand(request.tagRule)
           : null,
     ];
@@ -162,7 +162,7 @@ class FillInComposingStableTagRequest implements EditRequest {
   int get hashCode => tag.hashCode ^ tagRule.hashCode;
 }
 
-class FillInComposingUserTagCommand implements EditCommand {
+class FillInComposingUserTagCommand extends EditCommand {
   const FillInComposingUserTagCommand(
     this._tag,
     this._tagRule,
@@ -172,8 +172,11 @@ class FillInComposingUserTagCommand implements EditCommand {
   final TagRule _tagRule;
 
   @override
+  HistoryBehavior get historyBehavior => HistoryBehavior.undoable;
+
+  @override
   void execute(EditContext context, CommandExecutor executor) {
-    final document = context.find<MutableDocument>(Editor.documentKey);
+    final document = context.document;
     final composer = context.find<MutableDocumentComposer>(Editor.composerKey);
 
     final selection = composer.selection;
@@ -278,14 +281,17 @@ class CancelComposingStableTagRequest implements EditRequest {
   int get hashCode => tagRule.hashCode;
 }
 
-class CancelComposingStableTagCommand implements EditCommand {
+class CancelComposingStableTagCommand extends EditCommand {
   const CancelComposingStableTagCommand(this._tagRule);
 
   final TagRule _tagRule;
 
   @override
+  HistoryBehavior get historyBehavior => HistoryBehavior.undoable;
+
+  @override
   void execute(EditContext context, CommandExecutor executor) {
-    final document = context.find<MutableDocument>(Editor.documentKey);
+    final document = context.document;
     final composer = context.find<MutableDocumentComposer>(Editor.composerKey);
 
     final selection = composer.selection;
@@ -363,7 +369,7 @@ extension StableTagIndexEditable on EditContext {
 
 /// An [EditReaction] that creates, updates, and removes composing stable tags, and commits those
 /// composing tags, causing them to become uneditable.
-class TagUserReaction implements EditReaction {
+class TagUserReaction extends EditReaction {
   const TagUserReaction({
     required TagRule tagRule,
     this.onUpdateComposingStableTag,
@@ -381,7 +387,7 @@ class TagUserReaction implements EditReaction {
     editorStableTagsLog.info(
         "Caret position: ${editContext.find<MutableDocumentComposer>(Editor.composerKey).selection?.extent.nodePosition}");
 
-    final document = editContext.find<MutableDocument>(Editor.documentKey);
+    final document = editContext.document;
     _healCancelledTags(requestDispatcher, document, changeList);
 
     _adjustTagAttributionsAroundAlteredTags(editContext, requestDispatcher, changeList);
@@ -431,13 +437,13 @@ class TagUserReaction implements EditReaction {
   List<EditRequest> _healCancelledTagsInTextNode(RequestDispatcher requestDispatcher, TextNode node) {
     final cancelledTagRanges = node.text.getAttributionSpansInRange(
       attributionFilter: (a) => a == stableTagCancelledAttribution,
-      range: SpanRange(0, node.text.text.length - 1),
+      range: SpanRange(0, node.text.length - 1),
     );
 
     final changeRequests = <EditRequest>[];
 
     for (final range in cancelledTagRanges) {
-      final cancelledText = node.text.text.substring(range.start, range.end + 1); // +1 because substring is exclusive
+      final cancelledText = node.text.substring(range.start, range.end + 1); // +1 because substring is exclusive
       if (cancelledText == _tagRule.trigger) {
         // This is a legitimate cancellation attribution.
         continue;
@@ -480,7 +486,7 @@ class TagUserReaction implements EditReaction {
     RequestDispatcher requestDispatcher,
     List<EditEvent> changeList,
   ) {
-    final document = editContext.find<MutableDocument>(Editor.documentKey);
+    final document = editContext.document;
 
     final composingToken = _findComposingTagAtCaret(editContext);
     if (composingToken != null) {
@@ -520,7 +526,7 @@ class TagUserReaction implements EditReaction {
     List<EditEvent> changeList,
   ) {
     editorStableTagsLog.info("Removing invalid tags.");
-    final document = editContext.find<MutableDocument>(Editor.documentKey);
+    final document = editContext.document;
     final nodesToInspect = <String>{};
     for (final edit in changeList) {
       // We only care about deleted text, in case the deletion made an existing tag invalid.
@@ -537,10 +543,8 @@ class TagUserReaction implements EditReaction {
       }
 
       // We only care about deleted text when the deleted text contains at least one tag.
-      final tagsInDeletedText = change.deletedText.getAttributionSpansInRange(
-        attributionFilter: (attribution) =>
-            attribution == stableTagComposingAttribution || attribution is CommittedStableTagAttribution,
-        range: SpanRange(0, change.deletedText.text.length),
+      final tagsInDeletedText = change.deletedText.getAttributionSpansByFilter(
+        (attribution) => attribution == stableTagComposingAttribution || attribution is CommittedStableTagAttribution,
       );
       if (tagsInDeletedText.isEmpty) {
         continue;
@@ -559,11 +563,11 @@ class TagUserReaction implements EditReaction {
       // If a composing tag no longer contains a trigger ("@"), remove the attribution.
       final allComposingTags = textNode.text.getAttributionSpansInRange(
         attributionFilter: (attribution) => attribution == stableTagComposingAttribution,
-        range: SpanRange(0, textNode.text.text.length - 1),
+        range: SpanRange(0, textNode.text.length - 1),
       );
 
       for (final tag in allComposingTags) {
-        final tagText = textNode.text.text.substring(tag.start, tag.end + 1);
+        final tagText = textNode.text.substring(tag.start, tag.end + 1);
 
         if (!tagText.startsWith(_tagRule.trigger)) {
           editorStableTagsLog.info("Removing tag with value: '$tagText'");
@@ -590,7 +594,7 @@ class TagUserReaction implements EditReaction {
       final allStableTags = textNode.text
           .getAttributionSpansInRange(
             attributionFilter: (attribution) => attribution is CommittedStableTagAttribution,
-            range: SpanRange(0, textNode.text.text.length - 1),
+            range: SpanRange(0, textNode.text.length - 1),
           )
           .sorted((tag1, tag2) => tag2.start - tag1.start);
 
@@ -609,9 +613,9 @@ class TagUserReaction implements EditReaction {
           : -1;
 
       for (final tag in allStableTags) {
-        final tagText = textNode.text.text.substring(tag.start, tag.end + 1);
+        final tagText = textNode.text.substring(tag.start, tag.end + 1);
         final attribution = tag.attribution as CommittedStableTagAttribution;
-        final containsTrigger = textNode.text.text[tag.start] == _tagRule.trigger;
+        final containsTrigger = textNode.text.toPlainText()[tag.start] == _tagRule.trigger;
 
         if (tagText != "${_tagRule.trigger}${attribution.tagValue}" || !containsTrigger) {
           // The tag was partially deleted it. Delete the whole thing.
@@ -695,7 +699,7 @@ class TagUserReaction implements EditReaction {
       return;
     }
 
-    final document = editContext.find<MutableDocument>(Editor.documentKey);
+    final document = editContext.document;
     final selectedNode = document.getNodeById(selectionPosition.nodeId);
     if (selectedNode is! TextNode) {
       // Tagging only happens in the middle of text. The selected content isn't text. Return.
@@ -776,7 +780,7 @@ class TagUserReaction implements EditReaction {
     List<EditEvent> changeList,
   ) {
     editorStableTagsLog.fine("Looking for completed tags to commit.");
-    final document = editContext.find<MutableDocument>(Editor.documentKey);
+    final document = editContext.document;
     final composingTagNodeCandidates = <String>{};
     for (final edit in changeList) {
       if (edit is DocumentEdit && (edit.change is TextInsertionEvent || edit.change is TextDeletedEvent)) {
@@ -864,7 +868,7 @@ class TagUserReaction implements EditReaction {
         AddTextAttributionsRequest(
           documentRange: tagSelection,
           attributions: {
-            CommittedStableTagAttribution(textNode.text.text.substring(
+            CommittedStableTagAttribution(textNode.text.substring(
               tag.startOffset + 1, // +1 to remove the trigger ("@") from the value
               tag.endOffset,
             ))
@@ -893,7 +897,7 @@ class TagUserReaction implements EditReaction {
       return null;
     }
 
-    final document = editContext.find<MutableDocument>(Editor.documentKey);
+    final document = editContext.document;
     final selectedNode = document.getNodeById(selectionPosition.nodeId);
     if (selectedNode is! TextNode) {
       // Tagging only happens in the middle of text. The selected content isn't text. Return.
@@ -910,7 +914,7 @@ class TagUserReaction implements EditReaction {
   }
 
   void _updateTagIndex(EditContext editContext, List<EditEvent> changeList) {
-    final document = editContext.find<MutableDocument>(Editor.documentKey);
+    final document = editContext.document;
     final index = editContext.stableTagIndex;
     for (final event in changeList) {
       if (event is! DocumentEdit) {
@@ -957,11 +961,11 @@ class TagUserReaction implements EditReaction {
     final allTags = textNode.text
         .getAttributionSpansInRange(
           attributionFilter: attributionFilter,
-          range: SpanRange(0, textNode.text.text.length - 1),
+          range: SpanRange(0, textNode.text.length - 1),
         )
         .map(
           (span) => IndexedTag(
-            Tag.fromRaw(textNode.text.text.substring(span.start, span.end + 1)),
+            Tag.fromRaw(textNode.text.substring(span.start, span.end + 1)),
             textNode.id,
             span.start,
           ),
@@ -1078,6 +1082,13 @@ class StableTagIndex with ChangeNotifier implements Editable {
       notifyListeners();
     }
   }
+
+  @override
+  void reset() {
+    _composingStableTag.value = null;
+    _committedTags.clear();
+    _cancelledTags.clear();
+  }
 }
 
 class ComposingStableTag {
@@ -1096,10 +1107,13 @@ class ComposingStableTag {
 
   @override
   int get hashCode => contentBounds.hashCode ^ token.hashCode;
+
+  @override
+  String toString() => "[ComposingStableTag] - '$token', bounds: $contentBounds";
 }
 
 /// An [EditReaction] that prevents partial selection of a stable user tag.
-class AdjustSelectionAroundTagReaction implements EditReaction {
+class AdjustSelectionAroundTagReaction extends EditReaction {
   const AdjustSelectionAroundTagReaction(this._tagRule);
 
   final TagRule _tagRule;
@@ -1130,7 +1144,7 @@ class AdjustSelectionAroundTagReaction implements EditReaction {
 
     editorStableTagsLog.info(" - we received just one selection change event. Checking for user tag.");
 
-    final document = editContext.find<MutableDocument>(Editor.documentKey);
+    final document = editContext.document;
 
     final newCaret = selectionChangeEvent.newSelection?.extent;
     if (newCaret == null) {
@@ -1195,6 +1209,7 @@ class AdjustSelectionAroundTagReaction implements EditReaction {
         return;
       case SelectionChangeType.placeCaret:
       case SelectionChangeType.collapseSelection:
+      case SelectionChangeType.alteredContent:
       case SelectionChangeType.deleteContent:
         // Move the caret to the nearest edge of the tag.
         _moveCaretToNearestTagEdge(requestDispatcher, selectionChangeEvent, textNode.id, tagAroundCaret);
@@ -1221,7 +1236,7 @@ class AdjustSelectionAroundTagReaction implements EditReaction {
   }) {
     editorStableTagsLog.fine("Adjusting an expanded selection to avoid a partial stable tag selection.");
 
-    final document = editContext.find<MutableDocument>(Editor.documentKey);
+    final document = editContext.document;
     final extentNode = document.getNodeById(newCaret.nodeId);
     if (extentNode is! TextNode) {
       // The caret isn't sitting in text. Fizzle.
@@ -1243,6 +1258,7 @@ class AdjustSelectionAroundTagReaction implements EditReaction {
         // safe and do nothing in this case.
         return;
       case SelectionChangeType.placeExtent:
+      case SelectionChangeType.alteredContent:
       case SelectionChangeType.deleteContent:
         if (tagAroundCaret == null) {
           return;
@@ -1378,7 +1394,7 @@ class AdjustSelectionAroundTagReaction implements EditReaction {
     bool expand = false,
   }) {
     editorStableTagsLog.info("Pushing caret to other side of token - tag around caret: $tagAroundCaret");
-    final Document document = editContext.find<MutableDocument>(Editor.documentKey);
+    final Document document = editContext.document;
 
     final pushDirection = document.getAffinityBetween(
       base: selectionChangeEvent.oldSelection!.extent,
@@ -1434,7 +1450,7 @@ class AdjustSelectionAroundTagReaction implements EditReaction {
   }) {
     editorStableTagsLog.info("Pushing expanded selection to other side(s) of token(s)");
 
-    final document = editContext.find<MutableDocument>(Editor.documentKey);
+    final document = editContext.document;
     final selection = selectionChangeEvent.newSelection!;
     final selectionAffinity = document.getAffinityForSelection(selection);
 

@@ -69,22 +69,22 @@ class PatternTagPlugin extends SuperEditorPlugin {
   }
 
   void _initializePatternTagIndex(Editor editor) {
-    final document = editor.context.find<MutableDocument>(Editor.documentKey);
+    final document = editor.context.document;
 
-    for (final node in document.nodes) {
+    for (final node in document) {
       if (node is! TextNode) {
         continue;
       }
 
       final tagSpans = node.text.getAttributionSpansInRange(
         attributionFilter: (a) => a is PatternTagAttribution,
-        range: SpanRange(0, node.text.text.length - 1),
+        range: SpanRange(0, node.text.length - 1),
       );
 
       final tags = <IndexedTag>{};
       for (final tagSpan in tagSpans) {
         IndexedTag(
-          Tag.fromRaw(node.text.text.substring(tagSpan.start, tagSpan.end + 1)),
+          Tag.fromRaw(node.text.substring(tagSpan.start, tagSpan.end + 1)),
           node.id,
           tagSpan.start,
         );
@@ -173,6 +173,11 @@ class PatternTagIndex with ChangeNotifier implements Editable {
       notifyListeners();
     }
   }
+
+  @override
+  void reset() {
+    _tags.clear();
+  }
 }
 
 /// An [EditReaction] that creates, updates, and removes pattern tags.
@@ -194,7 +199,7 @@ class PatternTagIndex with ChangeNotifier implements Editable {
 ///     #.
 ///     ##
 ///
-class PatternTagReaction implements EditReaction {
+class PatternTagReaction extends EditReaction {
   PatternTagReaction({
     TagRule tagRule = hashTagRule,
   }) : _tagRule = tagRule;
@@ -239,7 +244,7 @@ class PatternTagReaction implements EditReaction {
     RequestDispatcher requestDispatcher,
     List<EditEvent> changeList,
   ) {
-    final document = editContext.find<MutableDocument>(Editor.documentKey);
+    final document = editContext.document;
 
     final tag = _findTagAtCaret(editContext, (attributions) => attributions.contains(const PatternTagAttribution()));
     if (tag == null) {
@@ -282,7 +287,7 @@ class PatternTagReaction implements EditReaction {
       return null;
     }
 
-    final document = editContext.find<MutableDocument>(Editor.documentKey);
+    final document = editContext.document;
     final selectedNode = document.getNodeById(selectionPosition.nodeId);
     if (selectedNode is! TextNode) {
       // Tagging only happens in the middle of text. The selected content isn't text. Return.
@@ -320,7 +325,7 @@ class PatternTagReaction implements EditReaction {
       return;
     }
 
-    final document = editContext.find<MutableDocument>(Editor.documentKey);
+    final document = editContext.document;
     final selectedNode = document.getNodeById(selectionPosition.nodeId);
     if (selectedNode is! TextNode) {
       // Tagging only happens in the middle of text. The selected content isn't text. Return.
@@ -393,7 +398,7 @@ class PatternTagReaction implements EditReaction {
   ///     [#flutter][#dart]
   ///
   void _splitBackToBackTags(EditContext editContext, RequestDispatcher requestDispatcher, List<EditEvent> changeList) {
-    final document = editContext.find<MutableDocument>(Editor.documentKey);
+    final document = editContext.document;
 
     final textEdits = changeList
         .whereType<DocumentEdit>()
@@ -413,9 +418,8 @@ class PatternTagReaction implements EditReaction {
   }
 
   void _splitBackToBackTagsInTextNode(RequestDispatcher requestDispatcher, TextNode node) {
-    final patternTags = node.text.getAttributionSpansInRange(
-      attributionFilter: (attribution) => attribution is PatternTagAttribution,
-      range: SpanRange(0, node.text.text.length),
+    final patternTags = node.text.getAttributionSpansByFilter(
+      (attribution) => attribution is PatternTagAttribution,
     );
     if (patternTags.isEmpty) {
       return;
@@ -426,7 +430,7 @@ class PatternTagReaction implements EditReaction {
 
     editorPatternTagsLog.finer("Found ${patternTags.length} pattern tag attributions in text node '${node.id}'");
     for (final patternTag in patternTags) {
-      final tagContent = node.text.text.substring(patternTag.start, patternTag.end + 1);
+      final tagContent = node.text.substring(patternTag.start, patternTag.end + 1);
       editorPatternTagsLog.finer("Inspecting $tagContent at ${patternTag.start} -> ${patternTag.end}");
 
       if (tagContent.lastIndexOf(_tagRule.trigger) == 0) {
@@ -441,9 +445,9 @@ class PatternTagReaction implements EditReaction {
       editorPatternTagsLog.finer("There are multiple triggers in this tag. Splitting.");
 
       // Remove the existing attribution, which covers multiple pattern tags.
-      spanRemovals.add(SpanRange(patternTag.start, patternTag.end));
+      spanRemovals.add(patternTag.range);
       editorPatternTagsLog.finer(
-          "Removing multi-tag span: ${patternTag.start} -> ${patternTag.end}, '${node.text.text.substring(patternTag.start, patternTag.end + 1)}'");
+          "Removing multi-tag span: ${patternTag.start} -> ${patternTag.end}, '${node.text.substring(patternTag.start, patternTag.end + 1)}'");
 
       // Add a new attribution for each individual pattern tag.
       int triggerSymbolIndex = tagContent.indexOf(_tagRule.trigger);
@@ -455,7 +459,7 @@ class PatternTagReaction implements EditReaction {
           // There's a trigger, followed by at least one non-trigger character. Therefore, this
           // is a legitimate pattern tag. Give it an attribution.
           editorPatternTagsLog.finer(
-              "Adding a split tag span: ${patternTag.start + triggerSymbolIndex} -> ${patternTag.start + tagEnd}, '${node.text.text.substring(patternTag.start + triggerSymbolIndex, patternTag.start + tagEnd + 1)}'");
+              "Adding a split tag span: ${patternTag.start + triggerSymbolIndex} -> ${patternTag.start + tagEnd}, '${node.text.substring(patternTag.start + triggerSymbolIndex, patternTag.start + tagEnd + 1)}'");
           spanCreations.add(SpanRange(
             patternTag.start + triggerSymbolIndex,
             patternTag.start + tagEnd,
@@ -464,6 +468,11 @@ class PatternTagReaction implements EditReaction {
 
         triggerSymbolIndex = nextTriggerSymbolIndex;
       }
+    }
+
+    if (spanRemovals.isEmpty) {
+      // We didn't find any tags to break up. No need to submit change requests.
+      return;
     }
 
     // Execute the attribution removals and additions.
@@ -511,9 +520,8 @@ class PatternTagReaction implements EditReaction {
       }
 
       // We only care about deleted text when the deleted text contains at least one tag.
-      final tagsInDeletedText = change.deletedText.getAttributionSpansInRange(
-        attributionFilter: (attribution) => attribution is PatternTagAttribution,
-        range: SpanRange(0, change.deletedText.text.length),
+      final tagsInDeletedText = change.deletedText.getAttributionSpansByFilter(
+        (attribution) => attribution is PatternTagAttribution,
       );
       if (tagsInDeletedText.isEmpty) {
         continue;
@@ -525,17 +533,17 @@ class PatternTagReaction implements EditReaction {
 
     // Inspect every TextNode where a text deletion impacted a tag. If a tag no longer contains
     // a trigger, or only contains a trigger, remove the attribution.
-    final document = editContext.find<MutableDocument>(Editor.documentKey);
+    final document = editContext.document;
     final removeTagRequests = <EditRequest>{};
     for (final nodeId in nodesToInspect) {
       final textNode = document.getNodeById(nodeId) as TextNode;
       final allTags = textNode.text.getAttributionSpansInRange(
         attributionFilter: (attribution) => attribution is PatternTagAttribution,
-        range: SpanRange(0, textNode.text.text.length - 1),
+        range: SpanRange(0, textNode.text.length - 1),
       );
 
       for (final tag in allTags) {
-        final tagText = textNode.text.text.substring(tag.start, tag.end + 1);
+        final tagText = textNode.text.substring(tag.start, tag.end + 1);
         if (!tagText.startsWith(_tagRule.trigger) || tagText == _tagRule.trigger) {
           editorPatternTagsLog.info("Removing tag with value: '$tagText'");
           removeTagRequests.add(
@@ -558,7 +566,7 @@ class PatternTagReaction implements EditReaction {
   }
 
   void _updateTagIndex(EditContext editContext, List<EditEvent> changeList) {
-    final document = editContext.find<MutableDocument>(Editor.documentKey);
+    final document = editContext.document;
     final index = editContext.patternTagIndex;
     for (final event in changeList) {
       if (event is! DocumentEdit) {
@@ -595,11 +603,11 @@ class PatternTagReaction implements EditReaction {
     final allTags = textNode.text
         .getAttributionSpansInRange(
           attributionFilter: (attribution) => attribution is PatternTagAttribution,
-          range: SpanRange(0, textNode.text.text.length - 1),
+          range: SpanRange(0, textNode.text.length - 1),
         )
         .map(
           (span) => IndexedTag(
-            Tag.fromRaw(textNode.text.text.substring(span.start, span.end + 1)),
+            Tag.fromRaw(textNode.text.substring(span.start, span.end + 1)),
             textNode.id,
             span.start,
           ),

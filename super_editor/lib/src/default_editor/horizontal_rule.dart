@@ -1,5 +1,6 @@
 import 'package:attributed_text/attributed_text.dart';
 import 'package:flutter/material.dart';
+import 'package:super_editor/src/default_editor/layout_single_column/selection_aware_viewmodel.dart';
 import 'package:super_editor/src/default_editor/selection_upstream_downstream.dart';
 
 import '../core/document.dart';
@@ -8,11 +9,13 @@ import 'layout_single_column/layout_single_column.dart';
 
 /// [DocumentNode] for a horizontal rule, which represents a full-width
 /// horizontal separation in a document.
-class HorizontalRuleNode extends BlockNode with ChangeNotifier {
+@immutable
+class HorizontalRuleNode extends BlockNode {
   HorizontalRuleNode({
     required this.id,
+    super.metadata,
   }) {
-    putMetadataValue("blockType", const NamedAttribution("horizontalRule"));
+    initAddToMetadata({"blockType": const NamedAttribution("horizontalRule")});
   }
 
   @override
@@ -30,6 +33,27 @@ class HorizontalRuleNode extends BlockNode with ChangeNotifier {
   @override
   bool hasEquivalentContent(DocumentNode other) {
     return other is HorizontalRuleNode;
+  }
+
+  @override
+  DocumentNode copyWithAddedMetadata(Map<String, dynamic> newProperties) {
+    return HorizontalRuleNode(
+      id: id,
+      metadata: {
+        ...metadata,
+        ...newProperties,
+      },
+    );
+  }
+
+  @override
+  DocumentNode copyAndReplaceMetadata(Map<String, dynamic> newMetadata) {
+    return HorizontalRuleNode(id: id, metadata: newMetadata);
+  }
+
+  @override
+  HorizontalRuleNode copy() {
+    return HorizontalRuleNode(id: id);
   }
 
   @override
@@ -65,7 +89,7 @@ class HorizontalRuleComponentBuilder implements ComponentBuilder {
 
     return HorizontalRuleComponent(
       componentKey: componentContext.componentKey,
-      selection: componentViewModel.selection,
+      selection: componentViewModel.selection?.nodeSelection as UpstreamDownstreamNodeSelection?,
       selectionColor: componentViewModel.selectionColor,
       showCaret: componentViewModel.caret != null,
       caretColor: componentViewModel.caretColor,
@@ -73,19 +97,20 @@ class HorizontalRuleComponentBuilder implements ComponentBuilder {
   }
 }
 
-class HorizontalRuleComponentViewModel extends SingleColumnLayoutComponentViewModel {
+class HorizontalRuleComponentViewModel extends SingleColumnLayoutComponentViewModel with SelectionAwareViewModelMixin {
   HorizontalRuleComponentViewModel({
-    required String nodeId,
-    double? maxWidth,
-    EdgeInsetsGeometry padding = EdgeInsets.zero,
-    this.selection,
-    required this.selectionColor,
+    required super.nodeId,
+    super.maxWidth,
+    super.padding = EdgeInsets.zero,
+    DocumentNodeSelection? selection,
+    Color selectionColor = Colors.transparent,
     this.caret,
     required this.caretColor,
-  }) : super(nodeId: nodeId, maxWidth: maxWidth, padding: padding);
+  }) {
+    super.selection = selection;
+    super.selectionColor = selectionColor;
+  }
 
-  UpstreamDownstreamNodeSelection? selection;
-  Color selectionColor;
   UpstreamDownstreamNodePosition? caret;
   Color caretColor;
 
@@ -147,14 +172,16 @@ class HorizontalRuleComponent extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SelectableBox(
-      selection: selection,
-      selectionColor: selectionColor,
-      child: BoxComponent(
-        key: componentKey,
-        child: Divider(
-          color: color,
-          thickness: thickness,
+    return IgnorePointer(
+      child: SelectableBox(
+        selection: selection,
+        selectionColor: selectionColor,
+        child: BoxComponent(
+          key: componentKey,
+          child: Divider(
+            color: color,
+            thickness: thickness,
+          ),
         ),
       ),
     );

@@ -66,8 +66,6 @@ class _MarkdownSerializationDemoState extends State<MarkdownSerializationDemo> {
             child: SuperEditor(
               key: _docKey,
               editor: _docEditor,
-              document: _doc,
-              composer: _composer,
               componentBuilders: [
                 TaskComponentBuilder(_docEditor),
                 ...defaultComponentBuilders,
@@ -137,11 +135,11 @@ MutableDocument _createInitialDocument() {
             AttributedSpans(
               attributions: [
                 SpanMarker(
-                    attribution: LinkAttribution(url: Uri.https('example.org', '')),
+                    attribution: LinkAttribution.fromUri(Uri.https('example.org', '')),
                     offset: 30,
                     markerType: SpanMarkerType.start),
                 SpanMarker(
-                    attribution: LinkAttribution(url: Uri.https('example.org', '')),
+                    attribution: LinkAttribution.fromUri(Uri.https('example.org', '')),
                     offset: 35,
                     markerType: SpanMarkerType.end),
               ],

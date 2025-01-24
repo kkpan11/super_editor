@@ -3,12 +3,11 @@ import 'dart:ui' as ui;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:super_editor/src/infrastructure/platforms/android/selection_handles.dart';
-import 'package:super_editor/src/infrastructure/platforms/ios/selection_handles.dart';
 import 'package:super_editor/super_editor.dart';
 import 'package:super_editor/super_editor_test.dart';
 
 import '../../../test/super_editor/supereditor_test_tools.dart';
+import '../../../test/test_flutter_extensions.dart';
 import '../../test_tools_goldens.dart';
 
 void main() {
@@ -23,7 +22,7 @@ void main() {
             .withiOSToolbarBuilder((context, mobileToolbarKey, focalPoint) => const SizedBox())
             .withAndroidToolbarBuilder((context, mobileToolbarKey, focalPoint) => const SizedBox())
             .pump();
-        final nodeId = testContext.findEditContext().document.nodes.first.id;
+        final nodeId = testContext.findEditContext().document.first.id;
 
         await tester.placeCaretInParagraph(nodeId, 15);
 
@@ -42,7 +41,7 @@ void main() {
             .withiOSToolbarBuilder((context, mobileToolbarKey, focalPoint) => const SizedBox())
             .withAndroidToolbarBuilder((context, mobileToolbarKey, focalPoint) => const SizedBox())
             .pump();
-        final nodeId = testContext.findEditContext().document.nodes.first.id;
+        final nodeId = testContext.findEditContext().document.first.id;
 
         await tester.doubleTapInParagraph(nodeId, 15);
 
@@ -61,7 +60,7 @@ void main() {
             .withiOSToolbarBuilder((context, mobileToolbarKey, focalPoint) => const SizedBox())
             .withAndroidToolbarBuilder((context, mobileToolbarKey, focalPoint) => const SizedBox())
             .pump();
-        final nodeId = testContext.findEditContext().document.nodes.first.id;
+        final nodeId = testContext.findEditContext().document.first.id;
 
         await tester.placeCaretInParagraph(nodeId, 15);
 
@@ -80,7 +79,7 @@ void main() {
             .withiOSToolbarBuilder((context, mobileToolbarKey, focalPoint) => const SizedBox())
             .withAndroidToolbarBuilder((context, mobileToolbarKey, focalPoint) => const SizedBox())
             .pump();
-        final nodeId = testContext.findEditContext().document.nodes.first.id;
+        final nodeId = testContext.findEditContext().document.first.id;
 
         await tester.doubleTapInParagraph(nodeId, 15);
 
@@ -98,17 +97,12 @@ void main() {
           DocumentGestureMode.android,
           "mobile-selection_android_single-tap-text",
           (tester, docKey, _) async {
-            final docBox = docKey.currentContext!.findRenderObject() as RenderBox;
-            final docLayout = docKey.currentState as DocumentLayout;
-            final characterBox = docLayout.getRectForPosition(
+            await tester.tapAtDocumentPosition(
               const DocumentPosition(nodeId: "1", nodePosition: TextNodePosition(offset: 34)),
-            );
-
-            await tester.tapAt(
-              docBox.localToGlobal(characterBox!.center),
             );
             await tester.pumpAndSettle();
           },
+          maxPixelMismatchCount: 51,
         );
 
         _testParagraphSelection(
@@ -116,34 +110,27 @@ void main() {
           DocumentGestureMode.android,
           "mobile-selection_android_drag-collapsed-upstream",
           (tester, docKey, dragLine) async {
-            final docBox = docKey.currentContext!.findRenderObject() as RenderBox;
-            final docLayout = docKey.currentState as DocumentLayout;
-            final characterBoxStart = docLayout.getRectForPosition(
+            await tester.tapAtDocumentPosition(
               const DocumentPosition(nodeId: "1", nodePosition: TextNodePosition(offset: 34)),
-            );
-            final characterBoxEnd = docLayout.getRectForPosition(
-              const DocumentPosition(nodeId: "1", nodePosition: TextNodePosition(offset: 28)),
-            );
-            final dragDelta = characterBoxEnd!.center - characterBoxStart!.center;
-
-            await tester.tapAt(
-              docBox.localToGlobal(characterBoxStart.center),
             );
             await tester.pumpAndSettle();
 
-            final handleFinder = find.byType(AndroidSelectionHandle);
-            final handleBox = handleFinder.evaluate().first.renderObject as RenderBox;
-            final handleRectGlobal = Rect.fromPoints(
-              handleBox.localToGlobal(Offset.zero),
-              handleBox.localToGlobal(
-                Offset(handleBox.size.width, handleBox.size.height),
-              ),
-            );
+            final dragDelta = SuperEditorInspector.findDeltaBetweenCharactersInTextNode("1", 34, 28);
+            final handleRectGlobal = SuperEditorInspector.findMobileCaretDragHandle().globalRect;
 
-            await tester.dragFrom(handleRectGlobal.center, dragDelta);
+            // Calculate the center of the visual handle, accounting for addition of invisible
+            // touch area expansion. The touch area only expands below the handle, not above
+            // the handle, so using the "center" of the widget would product a point that's
+            // too far down. The invisible height below the handle is about the same height as
+            // the handle, so we'll use the 25% y-value of the whole widget, which is roughly
+            // at the 50% y-value of the visible handle.
+            final centerOfVisualHandle =
+                Offset(handleRectGlobal.center.dx, handleRectGlobal.top + handleRectGlobal.height / 4);
+
+            await tester.dragFrom(centerOfVisualHandle, dragDelta);
 
             // Update the drag line for debug purposes
-            dragLine.value = _Line(handleRectGlobal.center, handleRectGlobal.center + dragDelta);
+            dragLine.value = _Line(handleRectGlobal.center, centerOfVisualHandle + dragDelta);
 
             // Even though this is a golden test, we verify the final selection
             // to make it easier to spot rendering problems vs selection problems.
@@ -157,6 +144,7 @@ void main() {
               ),
             );
           },
+          maxPixelMismatchCount: 51,
         );
 
         _testParagraphSelection(
@@ -164,30 +152,13 @@ void main() {
           DocumentGestureMode.android,
           "mobile-selection_android_drag-collapsed-downstream",
           (tester, docKey, dragLine) async {
-            final docBox = docKey.currentContext!.findRenderObject() as RenderBox;
-            final docLayout = docKey.currentState as DocumentLayout;
-            final characterBoxStart = docLayout.getRectForPosition(
+            await tester.tapAtDocumentPosition(
               const DocumentPosition(nodeId: "1", nodePosition: TextNodePosition(offset: 34)),
-            );
-            final characterBoxEnd = docLayout.getRectForPosition(
-              const DocumentPosition(nodeId: "1", nodePosition: TextNodePosition(offset: 39)),
-            );
-            final dragDelta = characterBoxEnd!.center - characterBoxStart!.center;
-
-            await tester.tapAt(
-              docBox.localToGlobal(characterBoxStart.center),
             );
             await tester.pumpAndSettle();
 
-            final handleFinder = find.byType(AndroidSelectionHandle);
-            final handleBox = handleFinder.evaluate().first.renderObject as RenderBox;
-            final handleRectGlobal = Rect.fromPoints(
-              handleBox.localToGlobal(Offset.zero),
-              handleBox.localToGlobal(
-                Offset(handleBox.size.width, handleBox.size.height),
-              ),
-            );
-
+            final dragDelta = SuperEditorInspector.findDeltaBetweenCharactersInTextNode("1", 34, 39);
+            final handleRectGlobal = SuperEditorInspector.findMobileCaretDragHandle().globalRect;
             await tester.dragFrom(handleRectGlobal.center, dragDelta);
 
             // Update the drag line for debug purposes
@@ -205,6 +176,7 @@ void main() {
               ),
             );
           },
+          maxPixelMismatchCount: 51,
         );
 
         _testParagraphSelection(
@@ -212,14 +184,8 @@ void main() {
           DocumentGestureMode.android,
           "mobile-selection_android_double-tap-text",
           (tester, docKey, rootWidget) async {
-            final docBox = docKey.currentContext!.findRenderObject() as RenderBox;
-            final docLayout = docKey.currentState as DocumentLayout;
-            final characterBox = docLayout.getRectForPosition(
+            await tester.doubleTapAtDocumentPosition(
               const DocumentPosition(nodeId: "1", nodePosition: TextNodePosition(offset: 34)),
-            );
-
-            await tester.doubleTapAt(
-              docBox.localToGlobal(characterBox!.center),
             );
             await tester.pumpAndSettle();
 
@@ -246,14 +212,8 @@ void main() {
           DocumentGestureMode.android,
           "mobile-selection_android_trip-tap-text",
           (tester, docKey, _) async {
-            final docBox = docKey.currentContext!.findRenderObject() as RenderBox;
-            final docLayout = docKey.currentState as DocumentLayout;
-            final characterBox = docLayout.getRectForPosition(
+            await tester.tripleTapAtDocumentPosition(
               const DocumentPosition(nodeId: "1", nodePosition: TextNodePosition(offset: 34)),
-            );
-
-            await tester.tripleTapAt(
-              docBox.localToGlobal(characterBox!.center),
             );
             await tester.pumpAndSettle();
 
@@ -280,31 +240,13 @@ void main() {
           DocumentGestureMode.android,
           "mobile-selection_android_drag-base-upstream",
           (tester, docKey, dragLine) async {
-            final docBox = docKey.currentContext!.findRenderObject() as RenderBox;
-            final docLayout = docKey.currentState as DocumentLayout;
-            final characterBoxStart = docLayout.getRectForPosition(
+            await tester.doubleTapAtDocumentPosition(
               const DocumentPosition(nodeId: "1", nodePosition: TextNodePosition(offset: 28)),
-            );
-            final characterBoxEnd = docLayout.getRectForPosition(
-              const DocumentPosition(nodeId: "1", nodePosition: TextNodePosition(offset: 22)),
-            );
-            final dragDelta = characterBoxEnd!.center - characterBoxStart!.center;
-
-            await tester.doubleTapAt(
-              docBox.localToGlobal(characterBoxStart.center),
             );
             await tester.pumpAndSettle();
 
-            // final handleFinder = find.byType(AndroidSelectionHandle);
-            final handleFinder = find.byKey(DocumentKeys.upstreamHandle);
-            final handleBox = handleFinder.evaluate().first.renderObject as RenderBox;
-            final handleRectGlobal = Rect.fromPoints(
-              handleBox.localToGlobal(Offset.zero),
-              handleBox.localToGlobal(
-                Offset(handleBox.size.width, handleBox.size.height),
-              ),
-            );
-
+            final dragDelta = SuperEditorInspector.findDeltaBetweenCharactersInTextNode("1", 28, 22);
+            final handleRectGlobal = SuperEditorInspector.findMobileBaseDragHandle().globalRect;
             await tester.dragFrom(handleRectGlobal.center, dragDelta);
 
             // Update the drag line for debug purposes
@@ -312,9 +254,6 @@ void main() {
 
             // Even though this is a golden test, we verify the final selection
             // to make it easier to spot rendering problems vs selection problems.
-            // FIXME: This is failing at least as of Dec, 2023 because the handle offset
-            //        lookup is wrong, probably due to the Follower not correctly reporting
-            //        offsets to descendants.
             expect(
               SuperEditorInspector.findDocumentSelection(),
               const DocumentSelection(
@@ -336,30 +275,13 @@ void main() {
           DocumentGestureMode.android,
           "mobile-selection_android_drag-extent-upstream",
           (tester, docKey, dragLine) async {
-            final docBox = docKey.currentContext!.findRenderObject() as RenderBox;
-            final docLayout = docKey.currentState as DocumentLayout;
-            final characterBoxStart = docLayout.getRectForPosition(
+            await tester.doubleTapAtDocumentPosition(
               const DocumentPosition(nodeId: "1", nodePosition: TextNodePosition(offset: 38)),
-            );
-            final characterBoxEnd = docLayout.getRectForPosition(
-              const DocumentPosition(nodeId: "1", nodePosition: TextNodePosition(offset: 30)),
-            );
-            final dragDelta = characterBoxEnd!.center - characterBoxStart!.center;
-
-            await tester.doubleTapAt(
-              docBox.localToGlobal(characterBoxStart.center),
             );
             await tester.pumpAndSettle();
 
-            final handleFinder = find.byType(AndroidSelectionHandle);
-            final handleBox = handleFinder.evaluate().elementAt(1).renderObject as RenderBox;
-            final handleRectGlobal = Rect.fromPoints(
-              handleBox.localToGlobal(Offset.zero),
-              handleBox.localToGlobal(
-                Offset(handleBox.size.width, handleBox.size.height),
-              ),
-            );
-
+            final dragDelta = SuperEditorInspector.findDeltaBetweenCharactersInTextNode("1", 38, 30);
+            final handleRectGlobal = SuperEditorInspector.findMobileExtentDragHandle().globalRect;
             await tester.dragFrom(handleRectGlobal.center, dragDelta);
 
             // Update the drag line for debug purposes
@@ -388,30 +310,13 @@ void main() {
           DocumentGestureMode.android,
           "mobile-selection_android_drag-extent-downstream",
           (tester, docKey, dragLine) async {
-            final docBox = docKey.currentContext!.findRenderObject() as RenderBox;
-            final docLayout = docKey.currentState as DocumentLayout;
-            final characterBoxStart = docLayout.getRectForPosition(
+            await tester.doubleTapAtDocumentPosition(
               const DocumentPosition(nodeId: "1", nodePosition: TextNodePosition(offset: 38)),
-            );
-            final characterBoxEnd = docLayout.getRectForPosition(
-              const DocumentPosition(nodeId: "1", nodePosition: TextNodePosition(offset: 44)),
-            );
-            final dragDelta = characterBoxEnd!.center - characterBoxStart!.center;
-
-            await tester.doubleTapAt(
-              docBox.localToGlobal(characterBoxStart.center),
             );
             await tester.pumpAndSettle();
 
-            final handleFinder = find.byType(AndroidSelectionHandle);
-            final handleBox = handleFinder.evaluate().elementAt(1).renderObject as RenderBox;
-            final handleRectGlobal = Rect.fromPoints(
-              handleBox.localToGlobal(Offset.zero),
-              handleBox.localToGlobal(
-                Offset(handleBox.size.width, handleBox.size.height),
-              ),
-            );
-
+            final dragDelta = SuperEditorInspector.findDeltaBetweenCharactersInTextNode("1", 38, 44);
+            final handleRectGlobal = SuperEditorInspector.findMobileExtentDragHandle().globalRect;
             await tester.dragFrom(handleRectGlobal.center, dragDelta);
 
             // Update the drag line for debug purposes
@@ -428,7 +333,11 @@ void main() {
                 ),
                 extent: DocumentPosition(
                   nodeId: "1",
-                  nodePosition: TextNodePosition(offset: 45),
+                  // We are dragging until the middle of a word, but since Android
+                  // selects by word instead of by character, the selection expands
+                  // to the end of the word. The drag line in the golden won't match
+                  // the drag handle position.
+                  nodePosition: TextNodePosition(offset: 50),
                 ),
               ),
             );
@@ -442,14 +351,8 @@ void main() {
           DocumentGestureMode.iOS,
           "mobile-selection_ios_single-tap-text",
           (tester, docKey, _) async {
-            final docBox = docKey.currentContext!.findRenderObject() as RenderBox;
-            final docLayout = docKey.currentState as DocumentLayout;
-            final characterBox = docLayout.getRectForPosition(
+            await tester.tapAtDocumentPosition(
               const DocumentPosition(nodeId: "1", nodePosition: TextNodePosition(offset: 34)),
-            );
-
-            await tester.tapAt(
-              docBox.localToGlobal(characterBox!.center),
             );
             await tester.pumpAndSettle();
 
@@ -472,33 +375,16 @@ void main() {
           DocumentGestureMode.iOS,
           "mobile-selection_ios_drag-collapsed-upstream",
           (tester, docKey, dragLine) async {
-            final docBox = docKey.currentContext!.findRenderObject() as RenderBox;
-            final docLayout = docKey.currentState as DocumentLayout;
-            final characterBoxStart = docLayout.getRectForPosition(
+            await tester.tapAtDocumentPosition(
               const DocumentPosition(nodeId: "1", nodePosition: TextNodePosition(offset: 34)),
             );
-            final characterBoxEnd = docLayout.getRectForPosition(
-              const DocumentPosition(nodeId: "1", nodePosition: TextNodePosition(offset: 28)),
-            );
-            final dragDelta = characterBoxEnd!.center - characterBoxStart!.center;
-
-            await tester.tapAt(
-              docBox.localToGlobal(characterBoxStart.center),
-            );
             await tester.pumpAndSettle();
+            // Wait a bit to ensure that the interactor recognizer doesn't consider this a double
+            // tap.
+            await tester.pump(kDoubleTapTimeout + const Duration(milliseconds: 1));
 
-            final handleFinder = find.byType(IOSCollapsedHandle);
-            final handleBox = handleFinder.evaluate().first.renderObject as RenderBox;
-            final handleRectGlobal = Rect.fromPoints(
-              handleBox.localToGlobal(Offset.zero),
-              handleBox.localToGlobal(
-                Offset(handleBox.size.width, handleBox.size.height),
-              ),
-            );
-
-            // Pump and settle so that the drag isn't perceived as a 2nd tap.
-            await tester.pumpAndSettle();
-
+            final dragDelta = SuperEditorInspector.findDeltaBetweenCharactersInTextNode("1", 34, 28);
+            final handleRectGlobal = SuperEditorInspector.findMobileCaret().globalRect;
             await tester.dragFrom(handleRectGlobal.center, dragDelta);
 
             // Update the drag line for debug purposes
@@ -523,33 +409,16 @@ void main() {
           DocumentGestureMode.iOS,
           "mobile-selection_ios_drag-collapsed-downstream",
           (tester, docKey, dragLine) async {
-            final docBox = docKey.currentContext!.findRenderObject() as RenderBox;
-            final docLayout = docKey.currentState as DocumentLayout;
-            final characterBoxStart = docLayout.getRectForPosition(
+            await tester.tapAtDocumentPosition(
               const DocumentPosition(nodeId: "1", nodePosition: TextNodePosition(offset: 34)),
             );
-            final characterBoxEnd = docLayout.getRectForPosition(
-              const DocumentPosition(nodeId: "1", nodePosition: TextNodePosition(offset: 39)),
-            );
-            final dragDelta = characterBoxEnd!.center - characterBoxStart!.center;
-
-            await tester.tapAt(
-              docBox.localToGlobal(characterBoxStart.center),
-            );
             await tester.pumpAndSettle();
+            // Wait a bit to ensure that the interactor recognizer doesn't consider this a double
+            // tap.
+            await tester.pump(kDoubleTapTimeout + const Duration(milliseconds: 1));
 
-            final handleFinder = find.byType(IOSCollapsedHandle);
-            final handleBox = handleFinder.evaluate().first.renderObject as RenderBox;
-            final handleRectGlobal = Rect.fromPoints(
-              handleBox.localToGlobal(Offset.zero),
-              handleBox.localToGlobal(
-                Offset(handleBox.size.width, handleBox.size.height),
-              ),
-            );
-
-            // Pump and settle so that the drag isn't perceived as a 2nd tap.
-            await tester.pumpAndSettle();
-
+            final dragDelta = SuperEditorInspector.findDeltaBetweenCharactersInTextNode("1", 34, 39);
+            final handleRectGlobal = SuperEditorInspector.findMobileCaret().globalRect;
             await tester.dragFrom(handleRectGlobal.center, dragDelta);
 
             // Update the drag line for debug purposes
@@ -574,14 +443,8 @@ void main() {
           DocumentGestureMode.iOS,
           "mobile-selection_ios_double-tap-text",
           (tester, docKey, rootWidget) async {
-            final docBox = docKey.currentContext!.findRenderObject() as RenderBox;
-            final docLayout = docKey.currentState as DocumentLayout;
-            final characterBox = docLayout.getRectForPosition(
+            await tester.doubleTapAtDocumentPosition(
               const DocumentPosition(nodeId: "1", nodePosition: TextNodePosition(offset: 34)),
-            );
-
-            await tester.doubleTapAt(
-              docBox.localToGlobal(characterBox!.center),
             );
             await tester.pumpAndSettle();
 
@@ -608,14 +471,8 @@ void main() {
           DocumentGestureMode.iOS,
           "mobile-selection_ios_trip-tap-text",
           (tester, docKey, _) async {
-            final docBox = docKey.currentContext!.findRenderObject() as RenderBox;
-            final docLayout = docKey.currentState as DocumentLayout;
-            final characterBox = docLayout.getRectForPosition(
+            await tester.tripleTapAtDocumentPosition(
               const DocumentPosition(nodeId: "1", nodePosition: TextNodePosition(offset: 34)),
-            );
-
-            await tester.tripleTapAt(
-              docBox.localToGlobal(characterBox!.center),
             );
             await tester.pumpAndSettle();
 
@@ -643,31 +500,13 @@ void main() {
           "mobile-selection_ios_drag-base-upstream",
           maxPixelMismatchCount: 1,
           (tester, docKey, dragLine) async {
-            final docBox = docKey.currentContext!.findRenderObject() as RenderBox;
-            final docLayout = docKey.currentState as DocumentLayout;
-            final characterBoxStart = docLayout.getRectForPosition(
+            await tester.doubleTapAtDocumentPosition(
               const DocumentPosition(nodeId: "1", nodePosition: TextNodePosition(offset: 28)),
             );
-            final characterBoxEnd = docLayout.getRectForPosition(
-              const DocumentPosition(nodeId: "1", nodePosition: TextNodePosition(offset: 22)),
-            );
-            final dragDelta = characterBoxEnd!.center - characterBoxStart!.center;
-
-            await tester.doubleTapAt(
-              docBox.localToGlobal(characterBoxStart.center),
-            );
-
             await tester.pumpAndSettle();
 
-            final handleFinder = find.byType(IOSSelectionHandle);
-            final handleBox = handleFinder.evaluate().first.renderObject as RenderBox;
-            final handleRectGlobal = Rect.fromPoints(
-              handleBox.localToGlobal(Offset.zero),
-              handleBox.localToGlobal(
-                Offset(handleBox.size.width, handleBox.size.height),
-              ),
-            );
-
+            final dragDelta = SuperEditorInspector.findDeltaBetweenCharactersInTextNode("1", 28, 22);
+            final handleRectGlobal = SuperEditorInspector.findMobileBaseDragHandle().globalRect;
             await tester.dragFrom(handleRectGlobal.center, dragDelta);
 
             // Update the drag line for debug purposes
@@ -696,30 +535,13 @@ void main() {
           DocumentGestureMode.iOS,
           "mobile-selection_ios_drag-extent-upstream",
           (tester, docKey, dragLine) async {
-            final docBox = docKey.currentContext!.findRenderObject() as RenderBox;
-            final docLayout = docKey.currentState as DocumentLayout;
-            final characterBoxStart = docLayout.getRectForPosition(
+            await tester.doubleTapAtDocumentPosition(
               const DocumentPosition(nodeId: "1", nodePosition: TextNodePosition(offset: 38)),
-            );
-            final characterBoxEnd = docLayout.getRectForPosition(
-              const DocumentPosition(nodeId: "1", nodePosition: TextNodePosition(offset: 30)),
-            );
-            final dragDelta = characterBoxEnd!.center - characterBoxStart!.center;
-
-            await tester.doubleTapAt(
-              docBox.localToGlobal(characterBoxStart.center),
             );
             await tester.pumpAndSettle();
 
-            final handleFinder = find.byType(IOSSelectionHandle);
-            final handleBox = handleFinder.evaluate().elementAt(1).renderObject as RenderBox;
-            final handleRectGlobal = Rect.fromPoints(
-              handleBox.localToGlobal(Offset.zero),
-              handleBox.localToGlobal(
-                Offset(handleBox.size.width, handleBox.size.height),
-              ),
-            );
-
+            final dragDelta = SuperEditorInspector.findDeltaBetweenCharactersInTextNode("1", 38, 30);
+            final handleRectGlobal = SuperEditorInspector.findMobileExtentDragHandle().globalRect;
             await tester.dragFrom(handleRectGlobal.center, dragDelta);
 
             // Update the drag line for debug purposes
@@ -748,30 +570,13 @@ void main() {
           DocumentGestureMode.iOS,
           "mobile-selection_ios_drag-extent-downstream",
           (tester, docKey, dragLine) async {
-            final docBox = docKey.currentContext!.findRenderObject() as RenderBox;
-            final docLayout = docKey.currentState as DocumentLayout;
-            final characterBoxStart = docLayout.getRectForPosition(
+            await tester.doubleTapAtDocumentPosition(
               const DocumentPosition(nodeId: "1", nodePosition: TextNodePosition(offset: 38)),
-            );
-            final characterBoxEnd = docLayout.getRectForPosition(
-              const DocumentPosition(nodeId: "1", nodePosition: TextNodePosition(offset: 44)),
-            );
-            final dragDelta = characterBoxEnd!.center - characterBoxStart!.center;
-
-            await tester.doubleTapAt(
-              docBox.localToGlobal(characterBoxStart.center),
             );
             await tester.pumpAndSettle();
 
-            final handleFinder = find.byType(IOSSelectionHandle);
-            final handleBox = handleFinder.evaluate().elementAt(1).renderObject as RenderBox;
-            final handleRectGlobal = Rect.fromPoints(
-              handleBox.localToGlobal(Offset.zero),
-              handleBox.localToGlobal(
-                Offset(handleBox.size.width, handleBox.size.height),
-              ),
-            );
-
+            final dragDelta = SuperEditorInspector.findDeltaBetweenCharactersInTextNode("1", 38, 44);
+            final handleRectGlobal = SuperEditorInspector.findMobileExtentDragHandle().globalRect;
             await tester.dragFrom(handleRectGlobal.center, dragDelta);
 
             // Update the drag line for debug purposes
@@ -906,9 +711,7 @@ Widget _buildScaffold({
     child: MaterialApp(
       home: Scaffold(
         body: Center(
-          child: IntrinsicHeight(
-            child: child,
-          ),
+          child: child,
         ),
       ),
       debugShowCheckedModeBanner: false,
@@ -1010,20 +813,4 @@ class _Line {
 
   @override
   int get hashCode => from.hashCode ^ to.hashCode;
-}
-
-extension on WidgetTester {
-  Future<void> doubleTapAt(Offset offset) async {
-    await tapAt(offset);
-    await pump(kDoubleTapMinTime);
-    await tapAt(offset);
-  }
-
-  Future<void> tripleTapAt(Offset offset) async {
-    await tapAt(offset);
-    await pump(kDoubleTapMinTime);
-    await tapAt(offset);
-    await pump(kDoubleTapMinTime);
-    await tapAt(offset);
-  }
 }

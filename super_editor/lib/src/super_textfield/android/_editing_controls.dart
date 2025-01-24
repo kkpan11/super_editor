@@ -1,12 +1,16 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:follow_the_leader/follow_the_leader.dart';
 import 'package:super_editor/src/infrastructure/flutter/flutter_scheduler.dart';
 import 'package:super_editor/src/infrastructure/multi_listenable_builder.dart';
 import 'package:super_editor/src/infrastructure/_logging.dart';
 import 'package:super_editor/src/infrastructure/platforms/android/magnifier.dart';
 import 'package:super_editor/src/infrastructure/platforms/android/selection_handles.dart';
+import 'package:super_editor/src/super_textfield/android/drag_handle_selection.dart';
 import 'package:super_editor/src/super_textfield/infrastructure/attributed_text_editing_controller.dart';
 import 'package:super_editor/src/super_textfield/infrastructure/text_scrollview.dart';
 import 'package:super_editor/src/infrastructure/toolbar_position_delegate.dart';
@@ -109,6 +113,8 @@ class _AndroidEditingOverlayControlsState extends State<AndroidEditingOverlayCon
   bool _isDraggingExtent = false;
   Offset? _globalDragOffset;
   Offset? _localDragOffset;
+  AndroidDocumentDragHandleSelectionStrategy? _dragHandleSelectionStrategy;
+
   // The offset between where the user touched the drag handle and
   // the vertical middle of the line of text that contains the
   // text position. We need this small offset because on Android the
@@ -191,9 +197,7 @@ class _AndroidEditingOverlayControlsState extends State<AndroidEditingOverlayCon
   void _onCollapsedPanStart(DragStartDetails details) {
     _log.fine('_onCollapsedPanStart');
 
-    widget.editingController
-      ..hideToolbar()
-      ..cancelCollapsedHandleAutoHideCountdown();
+    _onHandleDragStart();
 
     // TODO: de-dup the calculation of the mid-line focal point
     final globalOffsetInMiddleOfLine =
@@ -206,6 +210,11 @@ class _AndroidEditingOverlayControlsState extends State<AndroidEditingOverlayCon
           .globalToLocal(globalOffsetInMiddleOfLine),
     );
     widget.textScrollController.addListener(_updateSelectionForDragHandleAfterScrollChange);
+    _dragHandleSelectionStrategy = AndroidDocumentDragHandleSelectionStrategy(
+      textContentKey: widget.textContentKey,
+      textLayout: _textLayout,
+      select: _updateDragHandleSelection,
+    )..onHandlePanStart(details, widget.editingController.textController.selection, HandleType.collapsed);
 
     setState(() {
       _isDraggingCollapsed = true;
@@ -218,8 +227,16 @@ class _AndroidEditingOverlayControlsState extends State<AndroidEditingOverlayCon
     });
   }
 
+  void _onHandleTap(HandleType handleType) {
+    if (handleType == HandleType.collapsed) {
+      widget.editingController.toggleToolbar();
+    }
+  }
+
   void _onBasePanStart(DragStartDetails details) {
     _log.fine('_onBasePanStart');
+
+    _onHandleDragStart();
 
     // TODO: de-dup the calculation of the mid-line focal point
     final globalOffsetInMiddleOfLine =
@@ -227,18 +244,20 @@ class _AndroidEditingOverlayControlsState extends State<AndroidEditingOverlayCon
     _touchHandleOffsetFromLineOfText = globalOffsetInMiddleOfLine - details.globalPosition;
     _log.fine(' - global offset in middle of line: $globalOffsetInMiddleOfLine');
 
-    widget.editingController
-      ..hideToolbar()
-      ..cancelCollapsedHandleAutoHideCountdown();
-    _log.fine(' - hid the toolbar, cancelled countdown timer');
-
     // TODO: de-dup the repeated calculations of the effective focal point: globalPosition + _touchHandleOffsetFromLineOfText
     widget.textScrollController.updateAutoScrollingForTouchOffset(
       userInteractionOffsetInViewport: (widget.textFieldKey.currentContext!.findRenderObject() as RenderBox)
           .globalToLocal(details.globalPosition + _touchHandleOffsetFromLineOfText!),
     );
     widget.textScrollController.addListener(_updateSelectionForDragHandleAfterScrollChange);
+
     _log.fine(' - updated auto scrolling for touch offset');
+
+    _dragHandleSelectionStrategy = AndroidDocumentDragHandleSelectionStrategy(
+      textContentKey: widget.textContentKey,
+      textLayout: _textLayout,
+      select: _updateDragHandleSelection,
+    )..onHandlePanStart(details, widget.editingController.textController.selection, HandleType.upstream);
 
     setState(() {
       _isDraggingCollapsed = false;
@@ -255,14 +274,12 @@ class _AndroidEditingOverlayControlsState extends State<AndroidEditingOverlayCon
   void _onExtentPanStart(DragStartDetails details) {
     _log.fine('_onExtentPanStart');
 
+    _onHandleDragStart();
+
     // TODO: de-dup the calculation of the mid-line focal point
     final globalOffsetInMiddleOfLine =
         _getGlobalOffsetOfMiddleOfLine(widget.editingController.textController.selection.extent);
     _touchHandleOffsetFromLineOfText = globalOffsetInMiddleOfLine - details.globalPosition;
-
-    widget.editingController
-      ..hideToolbar()
-      ..cancelCollapsedHandleAutoHideCountdown();
 
     // TODO: de-dup the repeated calculations of the effective focal point: globalPosition + _touchHandleOffsetFromLineOfText
     widget.textScrollController.updateAutoScrollingForTouchOffset(
@@ -271,12 +288,32 @@ class _AndroidEditingOverlayControlsState extends State<AndroidEditingOverlayCon
     );
     widget.textScrollController.addListener(_updateSelectionForDragHandleAfterScrollChange);
 
+    _dragHandleSelectionStrategy = AndroidDocumentDragHandleSelectionStrategy(
+      textContentKey: widget.textContentKey,
+      textLayout: _textLayout,
+      select: _updateDragHandleSelection,
+    )..onHandlePanStart(details, widget.editingController.textController.selection, HandleType.downstream);
+
     setState(() {
       _isDraggingCollapsed = false;
       _isDraggingBase = false;
       _isDraggingExtent = true;
       _localDragOffset = (context.findRenderObject() as RenderBox).globalToLocal(details.globalPosition);
     });
+  }
+
+  void _onHandleDragStart() {
+    _log.fine('_onHandleDragStart()');
+
+    widget.editingController
+      ..hideToolbar()
+      ..cancelCollapsedHandleAutoHideCountdown();
+    _log.fine(' - hid the toolbar, cancelled countdown timer');
+
+    if (widget.editingController.textController.selection.isCollapsed) {
+      // The user is dragging the handle. Stop the caret from blinking while dragging.
+      widget.editingController.stopCaretBlinking();
+    }
   }
 
   void _onPanUpdate(DragUpdateDetails details) {
@@ -298,8 +335,16 @@ class _AndroidEditingOverlayControlsState extends State<AndroidEditingOverlayCon
     setState(() {
       _localDragOffset = _localDragOffset! + details.delta;
       widget.editingController.showMagnifier(_localDragOffset!);
+
       _log.fine(' - done updating all local state for drag update');
     });
+  }
+
+  void _updateDragHandleSelection(TextSelection selection) {
+    if (selection != widget.editingController.textController.selection) {
+      widget.editingController.textController.selection = selection;
+      HapticFeedback.lightImpact();
+    }
   }
 
   /// Calculates a new text selection based on the handle that the user is dragging
@@ -327,21 +372,8 @@ class _AndroidEditingOverlayControlsState extends State<AndroidEditingOverlayCon
   void _updateSelectionForCurrentDragHandleOffset() {
     final textBox = (widget.textContentKey.currentContext!.findRenderObject() as RenderBox);
     final textOffset = textBox.globalToLocal(_globalDragOffset! + _touchHandleOffsetFromLineOfText!);
-    final textLayout = widget.textContentKey.currentState!.textLayout;
-    if (_isDraggingCollapsed) {
-      widget.editingController.textController.selection = TextSelection.collapsed(
-        offset: textLayout.getPositionNearestToOffset(textOffset).offset,
-      );
-    } else if (_isDraggingBase) {
-      _log.fine('Dragging base. New offset: ${textLayout.getPositionNearestToOffset(textOffset).offset}');
-      widget.editingController.textController.selection = widget.editingController.textController.selection.copyWith(
-        baseOffset: textLayout.getPositionNearestToOffset(textOffset).offset,
-      );
-    } else if (_isDraggingExtent) {
-      widget.editingController.textController.selection = widget.editingController.textController.selection.copyWith(
-        extentOffset: textLayout.getPositionNearestToOffset(textOffset).offset,
-      );
-    }
+
+    _dragHandleSelectionStrategy!.onHandlePanUpdate(textOffset);
   }
 
   void _onPanEnd(DragEndDetails details) {
@@ -372,6 +404,10 @@ class _AndroidEditingOverlayControlsState extends State<AndroidEditingOverlayCon
         // expanded, show it again.
         widget.editingController.showToolbar();
       } else {
+        // The user stopped dragging a handle and the selection is collapsed.
+        // Start the caret blinking again.
+        widget.editingController.startCaretBlinking();
+
         // The collapsed handle should disappear after some inactivity.
         widget.editingController
           ..unHideCollapsedHandle()
@@ -446,7 +482,7 @@ class _AndroidEditingOverlayControlsState extends State<AndroidEditingOverlayCon
 
     double extentLineHeight =
         _textLayout.getCharacterBox(extentTextPosition)?.toRect().height ?? _textLayout.estimatedLineHeight;
-    if (widget.editingController.textController.text.text.isEmpty) {
+    if (widget.editingController.textController.text.isEmpty) {
       extentLineHeight = _textLayout.getLineHeightAtPosition(extentTextPosition);
     }
 
@@ -697,26 +733,32 @@ class _AndroidEditingOverlayControlsState extends State<AndroidEditingOverlayCon
     required void Function(DragStartDetails) onPanStart,
   }) {
     late Offset fractionalTranslation;
+    late final Offset expandedTouchAreaAdjustment;
     switch (handleType) {
       case HandleType.collapsed:
         fractionalTranslation = const Offset(-0.5, 0.0);
+        expandedTouchAreaAdjustment = Offset(0, -AndroidSelectionHandle.defaultTouchRegionExpansion.top);
         break;
       case HandleType.upstream:
         fractionalTranslation = const Offset(-1.0, 0.0);
+        expandedTouchAreaAdjustment = -AndroidSelectionHandle.defaultTouchRegionExpansion.topRight;
         break;
       case HandleType.downstream:
         fractionalTranslation = Offset.zero;
+        expandedTouchAreaAdjustment = -AndroidSelectionHandle.defaultTouchRegionExpansion.topLeft;
         break;
     }
 
     return CompositedTransformFollower(
       key: handleKey,
       link: widget.textContentLayerLink,
-      offset: followerOffset,
+      offset: followerOffset + expandedTouchAreaAdjustment,
       child: FractionalTranslation(
         translation: fractionalTranslation,
         child: GestureDetector(
+          dragStartBehavior: DragStartBehavior.down,
           behavior: HitTestBehavior.translucent,
+          onTap: () => _onHandleTap(handleType),
           onPanStart: onPanStart,
           onPanUpdate: _onPanUpdate,
           onPanEnd: _onPanEnd,
@@ -764,7 +806,7 @@ class _AndroidEditingOverlayControlsState extends State<AndroidEditingOverlayCon
     return Positioned(
       left: _localDragOffset!.dx,
       top: focalPointOffsetInMiddleOfLine.dy,
-      child: CompositedTransformTarget(
+      child: Leader(
         link: widget.editingController.magnifierFocalPoint,
         child: const SizedBox(width: 1, height: 1),
       ),
@@ -780,11 +822,9 @@ class _AndroidEditingOverlayControlsState extends State<AndroidEditingOverlayCon
     // When some other interaction wants to show the magnifier, then
     // that other area of the widget tree is responsible for
     // positioning the LayerLink target.
-    return Center(
-      child: AndroidFollowingMagnifier(
-        layerLink: widget.editingController.magnifierFocalPoint,
-        offsetFromFocalPoint: const Offset(0, -72),
-      ),
+    return AndroidFollowingMagnifier(
+      layerLink: widget.editingController.magnifierFocalPoint,
+      offsetFromFocalPoint: Offset(0, -54 * MediaQuery.devicePixelRatioOf(context)),
     );
   }
 
@@ -796,7 +836,8 @@ class _AndroidEditingOverlayControlsState extends State<AndroidEditingOverlayCon
 class AndroidEditingOverlayController with ChangeNotifier {
   AndroidEditingOverlayController({
     required this.textController,
-    required LayerLink magnifierFocalPoint,
+    required this.caretBlinkController,
+    required LeaderLink magnifierFocalPoint,
   }) : _magnifierFocalPoint = magnifierFocalPoint;
 
   @override
@@ -819,6 +860,18 @@ class AndroidEditingOverlayController with ChangeNotifier {
   /// this [textController].
   final AttributedTextEditingController textController;
 
+  final BlinkController caretBlinkController;
+
+  /// Starts the text field caret blinking.
+  void startCaretBlinking() {
+    caretBlinkController.startBlinking();
+  }
+
+  /// Stops the text field caret blinking.
+  void stopCaretBlinking() {
+    caretBlinkController.stopBlinking();
+  }
+
   void toggleToolbar() {
     if (isToolbarVisible) {
       hideToolbar();
@@ -840,8 +893,8 @@ class AndroidEditingOverlayController with ChangeNotifier {
     notifyListeners();
   }
 
-  final LayerLink _magnifierFocalPoint;
-  LayerLink get magnifierFocalPoint => _magnifierFocalPoint;
+  final LeaderLink _magnifierFocalPoint;
+  LeaderLink get magnifierFocalPoint => _magnifierFocalPoint;
 
   bool _isMagnifierVisible = false;
   bool get isMagnifierVisible => _isMagnifierVisible;

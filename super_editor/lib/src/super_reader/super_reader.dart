@@ -29,6 +29,7 @@ import 'package:super_editor/src/infrastructure/documents/document_scaffold.dart
 import 'package:super_editor/src/infrastructure/documents/document_scroller.dart';
 import 'package:super_editor/src/infrastructure/documents/document_selection.dart';
 import 'package:super_editor/src/infrastructure/documents/selection_leader_document_layer.dart';
+import 'package:super_editor/src/infrastructure/flutter/build_context.dart';
 import 'package:super_editor/src/infrastructure/links.dart';
 import 'package:super_editor/src/infrastructure/platforms/ios/ios_document_controls.dart';
 import 'package:super_editor/src/infrastructure/platforms/ios/toolbar.dart';
@@ -69,6 +70,7 @@ class SuperReader extends StatefulWidget {
     this.iOSToolbarBuilder,
     this.createOverlayControlsClipper,
     this.debugPaint = const DebugPaintConfig(),
+    this.shrinkWrap = false,
   })  : stylesheet = stylesheet ?? readOnlyDefaultStylesheet,
         selectionStyles = selectionStyle ?? readOnlyDefaultSelectionStyle,
         keyboardActions = keyboardActions ?? readOnlyDefaultKeyboardActions,
@@ -203,6 +205,10 @@ class SuperReader extends StatefulWidget {
   /// Paints some extra visual ornamentation to help with
   /// debugging.
   final DebugPaintConfig debugPaint;
+
+  /// Whether the scroll view used by the reader should shrink-wrap its contents.
+  /// Only used when reader is not inside an scrollable.
+  final bool shrinkWrap;
 
   @override
   State<SuperReader> createState() => SuperReaderState();
@@ -390,35 +396,34 @@ class SuperReaderState extends State<SuperReader> {
           readerContext: _readerContext,
           keyboardActions: widget.keyboardActions,
           autofocus: widget.autofocus,
-          child: _buildPlatformSpecificViewportDecorations(
-            controlsScopeContext,
-            child: DocumentScaffold(
-              documentLayoutLink: _documentLayoutLink,
-              documentLayoutKey: _docLayoutKey,
-              gestureBuilder: _buildGestureInteractor,
-              scrollController: _scrollController,
-              autoScrollController: _autoScrollController,
-              scroller: _scroller,
-              presenter: _docLayoutPresenter!,
-              componentBuilders: widget.componentBuilders,
-              underlays: [
-                // Add any underlays that were provided by the client.
-                for (final underlayBuilder in widget.documentUnderlayBuilders) //
-                  (context) => underlayBuilder.build(context, _readerContext),
-              ],
-              overlays: [
-                // Layer that positions and sizes leader widgets at the bounds
-                // of the users selection so that carets, handles, toolbars, and
-                // other things can follow the selection.
-                (context) => _SelectionLeadersDocumentLayerBuilder(
-                      links: _selectionLinks,
-                    ).build(context, _readerContext),
-                // Add any overlays that were provided by the client.
-                for (final overlayBuilder in widget.documentOverlayBuilders) //
-                  (context) => overlayBuilder.build(context, _readerContext),
-              ],
-              debugPaint: widget.debugPaint,
-            ),
+          child: DocumentScaffold(
+            viewportDecorationBuilder: _buildPlatformSpecificViewportDecorations,
+            documentLayoutLink: _documentLayoutLink,
+            documentLayoutKey: _docLayoutKey,
+            gestureBuilder: _buildGestureInteractor,
+            scrollController: _scrollController,
+            autoScrollController: _autoScrollController,
+            scroller: _scroller,
+            presenter: _docLayoutPresenter!,
+            componentBuilders: widget.componentBuilders,
+            shrinkWrap: widget.shrinkWrap,
+            underlays: [
+              // Add any underlays that were provided by the client.
+              for (final underlayBuilder in widget.documentUnderlayBuilders) //
+                (context) => underlayBuilder.build(context, _readerContext),
+            ],
+            overlays: [
+              // Layer that positions and sizes leader widgets at the bounds
+              // of the users selection so that carets, handles, toolbars, and
+              // other things can follow the selection.
+              (context) => _SelectionLeadersDocumentLayerBuilder(
+                    links: _selectionLinks,
+                  ).build(context, _readerContext),
+              // Add any overlays that were provided by the client.
+              for (final overlayBuilder in widget.documentOverlayBuilders) //
+                (context) => overlayBuilder.build(context, _readerContext),
+            ],
+            debugPaint: widget.debugPaint,
           ),
         );
       }),
@@ -479,7 +484,10 @@ class SuperReaderState extends State<SuperReader> {
     }
   }
 
-  Widget _buildGestureInteractor(BuildContext context) {
+  Widget _buildGestureInteractor(BuildContext context, {required Widget child}) {
+    // Ensure that gesture object fill entire viewport when not being
+    // in user specified scrollable.
+    final fillViewport = context.findAncestorScrollableWithVerticalScroll == null;
     switch (_gestureMode) {
       case DocumentGestureMode.mouse:
         return ReadOnlyDocumentMouseInteractor(
@@ -487,8 +495,9 @@ class SuperReaderState extends State<SuperReader> {
           readerContext: _readerContext,
           contentTapHandler: _contentTapDelegate,
           autoScroller: _autoScrollController,
+          fillViewport: fillViewport,
           showDebugPaint: widget.debugPaint.gestures,
-          child: const SizedBox(),
+          child: child,
         );
       case DocumentGestureMode.android:
         return ReadOnlyAndroidDocumentTouchInteractor(
@@ -506,6 +515,8 @@ class SuperReaderState extends State<SuperReader> {
           createOverlayControlsClipper: widget.createOverlayControlsClipper,
           showDebugPaint: widget.debugPaint.gestures,
           overlayController: widget.overlayController,
+          fillViewport: fillViewport,
+          child: child,
         );
       case DocumentGestureMode.iOS:
         return SuperReaderIosDocumentTouchInteractor(
@@ -516,7 +527,9 @@ class SuperReaderState extends State<SuperReader> {
           selection: _readerContext.selection,
           contentTapHandler: _contentTapDelegate,
           scrollController: _scrollController,
+          fillViewport: fillViewport,
           showDebugPaint: widget.debugPaint.gestures,
+          child: child,
         );
     }
   }
@@ -605,7 +618,10 @@ const defaultSuperReaderDocumentOverlayBuilders = [
 class _SelectionLeadersDocumentLayerBuilder implements SuperReaderDocumentLayerBuilder {
   const _SelectionLeadersDocumentLayerBuilder({
     required this.links,
-    // ignore: unused_element
+    // TODO(srawlins): `unused_element`, when reporting a parameter, is being
+    // renamed to `unused_element_parameter`. For now, ignore each; when the SDK
+    // constraint is >= 3.6.0, just ignore `unused_element_parameter`.
+    // ignore: unused_element, unused_element_parameter
     this.showDebugLeaderBounds = false,
   });
 
@@ -632,7 +648,10 @@ class _SelectionLeadersDocumentLayerBuilder implements SuperReaderDocumentLayerB
 /// iOS floating toolbar.
 class SuperReaderIosToolbarFocalPointDocumentLayerBuilder implements SuperReaderDocumentLayerBuilder {
   const SuperReaderIosToolbarFocalPointDocumentLayerBuilder({
-    // ignore: unused_element
+    // TODO(srawlins): `unused_element`, when reporting a parameter, is being
+    // renamed to `unused_element_parameter`. For now, ignore each; when the SDK
+    // constraint is >= 3.6.0, just ignore `unused_element_parameter`.
+    // ignore: unused_element, unused_element_parameter
     this.showDebugLeaderBounds = false,
   });
 
@@ -675,7 +694,12 @@ class SuperReaderLaunchLinkTapHandler extends ContentTapDelegate {
   }
 
   @override
-  TapHandlingInstruction onTap(DocumentPosition tapPosition) {
+  TapHandlingInstruction onTap(DocumentTapDetails details) {
+    final tapPosition = details.documentLayout.getDocumentPositionNearestToOffset(details.layoutOffset);
+    if (tapPosition == null) {
+      return TapHandlingInstruction.continueHandling;
+    }
+
     final link = _getLinkAtPosition(tapPosition);
     if (link != null) {
       // The user tapped on a link. Launch it.
@@ -703,7 +727,7 @@ class SuperReaderLaunchLinkTapHandler extends ContentTapDelegate {
     final tappedAttributions = textNode.text.getAllAttributionsAt(nodePosition.offset);
     for (final tappedAttribution in tappedAttributions) {
       if (tappedAttribution is LinkAttribution) {
-        return tappedAttribution.url;
+        return tappedAttribution.launchableUri;
       }
     }
 
@@ -842,6 +866,7 @@ final readOnlyDefaultStylesheet = Stylesheet(
     ),
   ],
   inlineTextStyler: readOnlyDefaultInlineTextStyler,
+  inlineWidgetBuilders: defaultInlineWidgetBuilderChain,
 );
 
 TextStyle readOnlyDefaultInlineTextStyler(Set<Attribution> attributions, TextStyle existingStyle) {

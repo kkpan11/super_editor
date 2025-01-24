@@ -63,11 +63,7 @@ Future<void> _pumpShortcutsAndSuperEditor(
   List<DocumentKeyboardAction> keyboardActions,
   VoidCallback onShortcut,
 ) async {
-  final document = MutableDocument(
-    nodes: [
-      ParagraphNode(id: "1", text: AttributedText()),
-    ],
-  );
+  final document = MutableDocument.empty("1");
   final composer = MutableDocumentComposer();
   final editor = createDefaultDocumentEditor(document: document, composer: composer);
 
@@ -87,8 +83,6 @@ Future<void> _pumpShortcutsAndSuperEditor(
             },
             child: SuperEditor(
               editor: editor,
-              document: document,
-              composer: composer,
               keyboardActions: keyboardActions,
             ),
           ),
